@@ -37,8 +37,15 @@ ingest.py  (local script for adding PDFs and documents)
 - Linux machine (the server that will host the brain)
 - Python 3.11+
 - PostgreSQL 15+ with the [pgvector](https://github.com/pgvector/pgvector) extension
-- A [Voyage AI](https://www.voyageai.com/) API key (free tier is sufficient)
 - Network access from your client machines to the server on port 8000
+
+**Embeddings** are used to power semantic search. The default backend is a free
+local model that runs on the server. A paid API is available as an alternative.
+
+| Backend | Model | Cost | Requires internet |
+|---------|-------|------|-------------------|
+| Local (default) | `BAAI/bge-large-en-v1.5` via sentence-transformers | Free | No |
+| Voyage AI | `voyage-large-2` | Paid API | Yes |
 
 ### Install PostgreSQL and pgvector
 
@@ -91,13 +98,26 @@ Then re-run the installer to continue:
 bash scripts/install.sh
 ```
 
-### 4. Verify the service is running
+### 4. Download the embedding model
+
+The local embedding model (~1.3 GB) is downloaded once and cached on the server.
+Run this after installing dependencies:
+
+```bash
+source .venv/bin/activate
+python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-large-en-v1.5')"
+```
+
+This takes a minute on first run. Subsequent starts load from the local cache at
+`~/.cache/huggingface/`.
+
+### 5. Verify the service is running
 
 ```bash
 sudo systemctl status openbrain-mcp
 ```
 
-### 5. Connect your AI clients
+### 6. Connect your AI clients
 
 Once the service is running, connect whichever clients you use.
 
@@ -160,6 +180,22 @@ bash scripts/setup_db.sh
 # 4. Start the MCP server
 MCP_TRANSPORT=sse python mcp_server.py
 ```
+
+## Using Voyage AI instead of the local model
+
+If you prefer faster embedding (useful when ingesting large document batches),
+set `EMBED_BACKEND=voyage` in `.env` and add your API key:
+
+```
+EMBED_BACKEND=voyage
+VOYAGE_API_KEY=your_key_here
+VOYAGE_MODEL=voyage-large-2
+```
+
+Note: if you switch backends after storing data, existing vectors and new vectors
+will be from different models and semantic search results will be unreliable.
+Re-embed all content by re-ingesting documents and re-running `capture_thought`
+on existing thoughts, or wipe and rebuild the database.
 
 ## Development
 

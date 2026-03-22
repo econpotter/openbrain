@@ -1,23 +1,30 @@
 """
 brain.py — core logic: embed, store, retrieve.
 
-All MCP tools call into this module. Database pool and embedding client
+All MCP tools call into this module. Database pool and embedding model
 are initialized lazily on first use.
+
+Embedding backend is controlled by EMBED_BACKEND in .env:
+  local   — sentence-transformers running on this machine (default, free)
+  voyage  — Voyage AI API (requires VOYAGE_API_KEY)
 """
 
+import asyncio
 import os
 import asyncpg
 import pgvector.asyncpg
-import voyageai
 from dotenv import load_dotenv
 
 load_dotenv()
 
 DATABASE_URL = os.environ["DATABASE_URL"]
-VOYAGE_API_KEY = os.environ["VOYAGE_API_KEY"]
-EMBED_MODEL = os.getenv("EMBED_MODEL", "voyage-large-2")
+EMBED_BACKEND = os.getenv("EMBED_BACKEND", "local")
+EMBED_MODEL_LOCAL = os.getenv("EMBED_MODEL_LOCAL", "BAAI/bge-large-en-v1.5")
+VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
+VOYAGE_MODEL = os.getenv("VOYAGE_MODEL", "voyage-large-2")
 
 _pool: asyncpg.Pool | None = None
+_st_model = None
 
 
 async def get_pool() -> asyncpg.Pool:
@@ -30,10 +37,25 @@ async def get_pool() -> asyncpg.Pool:
     return _pool
 
 
+def _load_st_model():
+    global _st_model
+    if _st_model is None:
+        from sentence_transformers import SentenceTransformer
+        _st_model = SentenceTransformer(EMBED_MODEL_LOCAL)
+    return _st_model
+
+
 async def embed(text: str) -> list[float]:
-    client = voyageai.AsyncClient(api_key=VOYAGE_API_KEY)
-    result = await client.embed([text], model=EMBED_MODEL)
-    return result.embeddings[0]
+    if EMBED_BACKEND == "voyage":
+        import voyageai
+        client = voyageai.AsyncClient(api_key=VOYAGE_API_KEY)
+        result = await client.embed([text], model=VOYAGE_MODEL)
+        return result.embeddings[0]
+    else:
+        loop = asyncio.get_event_loop()
+        model = await loop.run_in_executor(None, _load_st_model)
+        embedding = await loop.run_in_executor(None, lambda: model.encode(text).tolist())
+        return embedding
 
 
 async def store_thought(content: str, metadata: dict | None = None) -> str:

@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# install.sh — Full install: venv, deps, DB, systemd service.
+# Run from the project root as a user with sudo access.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+SERVICE_NAME="openbrain-mcp"
+CURRENT_USER="$(whoami)"
+
+echo "=== Open Brain install ==="
+echo "Project dir: $PROJECT_DIR"
+echo "User:        $CURRENT_USER"
+echo
+
+# ── 1. Python venv ──────────────────────────────────────────────────────────
+echo "[1/4] Creating Python virtual environment..."
+cd "$PROJECT_DIR"
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --quiet --upgrade pip
+pip install --quiet -r requirements.txt
+echo "      Done."
+
+# ── 2. .env ──────────────────────────────────────────────────────────────────
+echo "[2/4] Checking .env..."
+if [ ! -f "$PROJECT_DIR/.env" ]; then
+    cp "$PROJECT_DIR/.env.example" "$PROJECT_DIR/.env"
+    echo "      Created .env from .env.example."
+    echo "      *** Fill in DATABASE_URL and VOYAGE_API_KEY before continuing. ***"
+    echo "      Then re-run this script."
+    exit 0
+else
+    echo "      .env already exists, skipping."
+fi
+
+# ── 3. Database ───────────────────────────────────────────────────────────────
+echo "[3/4] Applying database migrations..."
+bash "$SCRIPT_DIR/setup_db.sh"
+
+# ── 4. systemd service ────────────────────────────────────────────────────────
+echo "[4/4] Installing systemd service..."
+SERVICE_SRC="$SCRIPT_DIR/openbrain-mcp.service"
+SERVICE_DST="/etc/systemd/system/$SERVICE_NAME.service"
+
+# Substitute placeholders in the service template
+sed \
+    -e "s|__PROJECT_DIR__|$PROJECT_DIR|g" \
+    -e "s|__USER__|$CURRENT_USER|g" \
+    "$SERVICE_SRC" | sudo tee "$SERVICE_DST" > /dev/null
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now "$SERVICE_NAME"
+echo "      Service enabled and started."
+echo "      Check status: sudo systemctl status $SERVICE_NAME"
+
+echo
+echo "=== Installation complete ==="
+echo "Connect Claude.ai: Settings → Connectors → Add MCP server"
+echo "URL: http://<tailscale-hostname>:8000"

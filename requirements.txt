@@ -1,0 +1,8 @@
+fastmcp
+asyncpg
+pgvector
+pdfplumber
+voyageai
+python-dotenv
+typer
+rich

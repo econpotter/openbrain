@@ -18,7 +18,7 @@ mediates all reads and writes. You never touch the database directly.
   each morning
 
 Everything is stored in a local Postgres database. The MCP server runs on your
-machine and is accessible remotely via Tailscale — no public internet exposure.
+machine and is accessible remotely from any client you connect.
 
 ## Architecture
 
@@ -37,8 +37,8 @@ ingest.py  (local script for adding PDFs and documents)
 - Linux machine (the server that will host the brain)
 - Python 3.11+
 - PostgreSQL 15+ with the [pgvector](https://github.com/pgvector/pgvector) extension
-- [Tailscale](https://tailscale.com/) for remote access
 - A [Voyage AI](https://www.voyageai.com/) API key (free tier is sufficient)
+- Network access from your client machines to the server on port 8000
 
 ### Install PostgreSQL and pgvector
 
@@ -54,15 +54,6 @@ Create the database:
 sudo -u postgres createuser --superuser $USER
 createdb openbrain
 ```
-
-### Install Tailscale
-
-```bash
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up
-```
-
-Note your Tailscale hostname — you will need it to connect Claude.ai.
 
 ## Deployment
 
@@ -106,14 +97,49 @@ bash scripts/install.sh
 sudo systemctl status openbrain-mcp
 ```
 
-### 5. Connect Claude.ai
+### 5. Connect your AI clients
 
-In Claude.ai: **Settings → Connectors → Add MCP server**
+Once the service is running, connect whichever clients you use.
 
-URL: `http://<your-tailscale-hostname>:8000`
+#### Claude.ai (web)
 
-Once connected, Claude will have access to `capture_thought`, `search_thoughts`,
-`browse_recent`, and `get_stats`.
+**Settings → Connectors → Add MCP server**
+
+URL: `http://<your-hostname>:8000`
+
+#### Claude Code (CLI)
+
+Add the server to `~/.claude/settings.json` on your client machine:
+
+```json
+{
+  "mcpServers": {
+    "openbrain": {
+      "type": "sse",
+      "url": "http://<your-hostname>:8000/sse"
+    }
+  }
+}
+```
+
+Then verify the connection:
+
+```bash
+claude mcp list
+```
+
+#### Project instruction (Claude.ai)
+
+To make Claude automatically preserve memories at the end of conversations,
+add this to your Claude.ai project instructions:
+
+```
+At the end of our conversation, or when I say "remember this", call
+capture_thought to store a distilled summary of any facts, decisions, or
+insights worth preserving. Extract people, projects, and topics from the
+content and include them in metadata. Link to relevant library entries
+where applicable.
+```
 
 ## Manual deployment (without the installer)
 

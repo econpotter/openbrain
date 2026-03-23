@@ -125,18 +125,24 @@ Once the service is running, connect whichever clients you use.
 
 **Settings → Connectors → Add MCP server**
 
-URL: `http://<your-hostname>:8000`
+URL: `http://<your-hostname>/mcp`
 
 #### Claude Code (CLI)
 
-Add the server to `~/.claude/settings.json` on your client machine:
+Use 
+
+```bash
+claude mcp add --transport http openbrain https://<your server>/mcp
+``` 
+
+to add directly, or add the server to `~/.claude/settings.json` on your client machine:
 
 ```json
 {
   "mcpServers": {
     "openbrain": {
-      "type": "sse",
-      "url": "http://<your-hostname>:8000/sse"
+      "type": "http",
+      "url": "https://<your-hostname>/mcp"
     }
   }
 }
@@ -178,7 +184,7 @@ cp .env.example .env
 bash scripts/setup_db.sh
 
 # 4. Start the MCP server
-MCP_TRANSPORT=sse python mcp_server.py
+MCP_TRANSPORT=http python mcp_server.py
 ```
 
 ## Using Voyage AI instead of the local model

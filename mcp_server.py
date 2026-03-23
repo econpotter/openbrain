@@ -3,7 +3,7 @@ mcp_server.py — FastMCP server exposing Open Brain tools to Claude/Gemini.
 
 Transport is controlled by the MCP_TRANSPORT environment variable:
   stdio  — for local development and testing (default)
-  sse    — for remote access via Claude.ai / Gemini with Tailscale
+  http   — streamable HTTP for remote access via Claude.ai / Gemini
 """
 
 import os
@@ -29,7 +29,7 @@ if __name__ == "__main__":
     transport = os.getenv("MCP_TRANSPORT", "stdio")
     port = int(os.getenv("PORT", "8000"))
 
-    if transport == "sse":
-        mcp.run(transport="sse", host="0.0.0.0", port=port)
+    if transport == "http":
+        mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
     else:
         mcp.run()

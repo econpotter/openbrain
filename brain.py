@@ -112,6 +112,150 @@ async def recent_thoughts(since_hours: int = 24, limit: int = 50) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def _entity_text(table: str, row: dict) -> str:
+    """Concatenate the meaningful text fields of a people or projects row for embedding."""
+    if table == "people":
+        parts = [row.get("name") or "", row.get("affiliation") or "",
+                 row.get("relationship") or "", row.get("notes") or ""]
+    else:
+        parts = [row.get("name") or "", row.get("description") or ""]
+    return " ".join(p for p in parts if p)
+
+
+async def list_people(search: str | None = None) -> list[dict]:
+    """Return all people, optionally filtered by name."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        if search:
+            rows = await conn.fetch(
+                "SELECT id, name, affiliation, relationship, notes FROM people "
+                "WHERE name ILIKE $1 ORDER BY name",
+                f"%{search}%",
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT id, name, affiliation, relationship, notes FROM people ORDER BY name"
+            )
+    return [dict(r) for r in rows]
+
+
+async def update_person(person_id: str, updates: dict) -> dict | None:
+    """Update fields on a person row. Refreshes embedding. Returns updated row or None."""
+    allowed = {"name", "affiliation", "relationship", "notes"}
+    fields = {k: v for k, v in updates.items() if k in allowed}
+    if not fields:
+        return None
+    pool = await get_pool()
+    set_clause = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(fields))
+    values = [person_id] + list(fields.values())
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"UPDATE people SET {set_clause} WHERE id = $1 "
+            "RETURNING id, name, affiliation, relationship, notes",
+            *values,
+        )
+    if row:
+        updated = dict(row)
+        text = await _entity_text("people", updated)
+        emb = await embed(text)
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE people SET embedding = $1 WHERE id = $2", emb, person_id
+            )
+        return updated
+    return None
+
+
+async def search_people_vec(query: str, threshold: float = 0.3, count: int = 10) -> list[dict]:
+    """Semantic search over people."""
+    pool = await get_pool()
+    embedding = await embed(query)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM match_people($1, $2, $3)", embedding, threshold, count
+        )
+    return [dict(r) for r in rows]
+
+
+async def find_person_by_name(name: str) -> list[dict]:
+    """Find people whose name matches (case-insensitive)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, name, affiliation, relationship, notes FROM people "
+            "WHERE name ILIKE $1 ORDER BY name",
+            f"%{name}%",
+        )
+    return [dict(r) for r in rows]
+
+
+async def list_projects(status: str | None = None) -> list[dict]:
+    """Return all projects, optionally filtered by status."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        if status:
+            rows = await conn.fetch(
+                "SELECT id, name, description, status, start_date FROM projects "
+                "WHERE status = $1 ORDER BY name",
+                status,
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT id, name, description, status, start_date FROM projects ORDER BY name"
+            )
+    return [dict(r) for r in rows]
+
+
+async def update_project(project_id: str, updates: dict) -> dict | None:
+    """Update fields on a project row. Refreshes embedding. Returns updated row or None."""
+    allowed = {"name", "description", "status", "start_date"}
+    fields = {k: v for k, v in updates.items() if k in allowed}
+    if not fields:
+        return None
+    pool = await get_pool()
+    set_clause = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(fields))
+    values = [project_id] + list(fields.values())
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"UPDATE projects SET {set_clause} WHERE id = $1 "
+            "RETURNING id, name, description, status, start_date",
+            *values,
+        )
+    if row:
+        updated = dict(row)
+        text = await _entity_text("projects", updated)
+        emb = await embed(text)
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE projects SET embedding = $1 WHERE id = $2", emb, project_id
+            )
+        return updated
+    return None
+
+
+async def search_projects_vec(query: str, threshold: float = 0.3, count: int = 10) -> list[dict]:
+    """Semantic search over projects."""
+    pool = await get_pool()
+    embedding = await embed(query)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM match_projects($1, $2, $3)", embedding, threshold, count
+        )
+    return [dict(r) for r in rows]
+
+
+async def find_project_by_name(name: str) -> list[dict]:
+    """Find projects whose name matches (case-insensitive)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, name, description, status, start_date FROM projects "
+            "WHERE name ILIKE $1 ORDER BY name",
+            f"%{name}%",
+        )
+    return [dict(r) for r in rows]
+
+
 async def table_stats() -> dict:
     """Return row counts and recent activity metrics."""
     pool = await get_pool()

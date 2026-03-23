@@ -122,6 +122,40 @@ async def _entity_text(table: str, row: dict) -> str:
     return " ".join(p for p in parts if p)
 
 
+async def add_person(name: str, affiliation: str | None = None, relationship: str | None = None, notes: str | None = None) -> dict:
+    """Insert a new person and embed them. Returns the new row."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "INSERT INTO people (name, affiliation, relationship, notes) "
+            "VALUES ($1, $2, $3, $4) RETURNING id, name, affiliation, relationship, notes",
+            name, affiliation, relationship, notes,
+        )
+    inserted = dict(row)
+    text = await _entity_text("people", inserted)
+    emb = await embed(text)
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE people SET embedding = $1 WHERE id = $2", emb, str(inserted["id"]))
+    return inserted
+
+
+async def add_project(name: str, description: str | None = None, status: str = "active", start_date: str | None = None) -> dict:
+    """Insert a new project and embed it. Returns the new row."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "INSERT INTO projects (name, description, status, start_date) "
+            "VALUES ($1, $2, $3, $4) RETURNING id, name, description, status, start_date",
+            name, description, status, start_date,
+        )
+    inserted = dict(row)
+    text = await _entity_text("projects", inserted)
+    emb = await embed(text)
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE projects SET embedding = $1 WHERE id = $2", emb, str(inserted["id"]))
+    return inserted
+
+
 async def list_people(search: str | None = None) -> list[dict]:
     """Return all people, optionally filtered by name."""
     pool = await get_pool()

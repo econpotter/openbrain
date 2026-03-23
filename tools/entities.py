@@ -7,6 +7,44 @@ import brain
 
 def register(mcp):
     @mcp.tool
+    async def add_person(
+        name: str,
+        affiliation: str | None = None,
+        relationship: str | None = None,
+        notes: str | None = None,
+    ) -> str:
+        """
+        Add a new person to the database.
+
+        Args:
+            name:         Full name.
+            affiliation:  Institution or organization.
+            relationship: collaborator | author | contact | advisor
+            notes:        Any additional notes.
+        """
+        row = await brain.add_person(name, affiliation, relationship, notes)
+        return f"Added: {row['name']}"
+
+    @mcp.tool
+    async def add_project(
+        name: str,
+        description: str | None = None,
+        status: str = "active",
+        start_date: str | None = None,
+    ) -> str:
+        """
+        Add a new project to the database.
+
+        Args:
+            name:        Project name.
+            description: Brief description.
+            status:      active | paused | completed | archived. Default: active.
+            start_date:  Start date as YYYY-MM-DD.
+        """
+        row = await brain.add_project(name, description, status, start_date)
+        return f"Added: {row['name']} [{row['status']}]"
+
+    @mcp.tool
     async def search_people(query: str, threshold: float = 0.3, count: int = 10) -> str:
         """
         Semantic search over people — find people related to a topic or description.

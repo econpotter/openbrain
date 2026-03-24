@@ -3,12 +3,15 @@ Description=Open Brain MCP Server
 After=network.target postgresql.service
 
 [Service]
+Type=simple
 User=__USER__
 WorkingDirectory=__PROJECT_DIR__
 EnvironmentFile=__PROJECT_DIR__/.env
 ExecStart=__PROJECT_DIR__/.venv/bin/python mcp_server.py
 Restart=on-failure
 RestartSec=5
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

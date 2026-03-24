@@ -203,6 +203,56 @@ will be from different models and semantic search results will be unreliable.
 Re-embed all content by re-ingesting documents and re-running `capture_thought`
 on existing thoughts, or wipe and rebuild the database.
 
+## Backup and restore
+
+The installer sets up a daily systemd timer that backs up both the database and
+library files automatically. Backups are kept for 30 days by default.
+
+### Run a backup manually
+
+```bash
+bash scripts/backup.sh
+```
+
+Backups are written to `BACKUP_DIR` (default `~/backups/openbrain`):
+
+```
+openbrain_20260324_020000.sql.gz   ← database dump
+library_20260324_020000.tar.gz     ← library files
+```
+
+### Check backup timer status
+
+```bash
+systemctl status openbrain-backup.timer
+systemctl list-timers openbrain-backup.timer
+```
+
+### Restore the database
+
+```bash
+# Drop and recreate the database
+dropdb openbrain && createdb openbrain
+
+# Restore from a dump
+gunzip -c ~/backups/openbrain/openbrain_<timestamp>.sql.gz | psql $DATABASE_URL
+```
+
+### Restore library files
+
+```bash
+tar -xzf ~/backups/openbrain/library_<timestamp>.tar.gz -C ~/
+```
+
+### Configure backup retention
+
+In `.env`:
+
+```
+BACKUP_DIR=~/backups/openbrain
+BACKUP_KEEP_DAYS=30
+```
+
 ## Development
 
 Run the server locally over stdio (no HTTP, useful for testing with the MCP
@@ -226,10 +276,10 @@ python ingest.py paper.pdf --force    # re-ingest a duplicate
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | Core capture & recall (`capture_thought`, `search_thoughts`, `browse_recent`, `get_stats`) | Complete |
-| 2 | Library (`ingest_document`, `search_library`, `update_status`) | Planned |
-| 3 | Entities (`find_person`, `find_project`, `link_entities`) | Planned |
-| 4 | Cross-table intelligence (`search_brain`, `get_daily_briefing`) | Planned |
-| 5 | Hardening (systemd, backups, index tuning) | Planned |
+| 2 | Library (`ingest_document`, `ingest_directory`, `search_library`, `update_library`, `update_status`) | Complete |
+| 3 | Entities (`add_person`, `add_project`, `list_people`, `list_projects`, `update_person`, `update_project`, `search_people`, `search_projects`, `search_by_entity`) | Complete |
+| 4 | Cross-table intelligence (`search_brain`, `get_briefing`) | Complete |
+| 5 | Hardening (systemd, daily backups, logging) | Complete |
 
 ## Repository structure
 
@@ -240,7 +290,10 @@ mcp_server.py        FastMCP server entry point
 ingest.py            Standalone script for ingesting documents
 tools/               MCP tool implementations, one file per tool group
 scripts/
-  setup_db.sh        Apply all migrations
-  install.sh         Full install: venv, .env, DB, systemd
-  openbrain-mcp.service  systemd unit template
+  setup_db.sh                 Apply all migrations
+  install.sh                  Full install: venv, .env, DB, systemd, backup timer
+  backup.sh                   Back up database and library files
+  openbrain-mcp.service       systemd unit template for MCP server
+  openbrain-backup.service    systemd unit template for backup job
+  openbrain-backup.timer      systemd timer (runs backup daily)
 ```

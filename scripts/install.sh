@@ -54,7 +54,21 @@ sudo systemctl enable --now "$SERVICE_NAME"
 echo "      Service enabled and started."
 echo "      Check status: sudo systemctl status $SERVICE_NAME"
 
+# ── 5. Backup timer ───────────────────────────────────────────────────────────
+echo "[5/5] Installing backup timer..."
+for unit in openbrain-backup.service openbrain-backup.timer; do
+    sed \
+        -e "s|__PROJECT_DIR__|$PROJECT_DIR|g" \
+        -e "s|__USER__|$CURRENT_USER|g" \
+        "$SCRIPT_DIR/$unit" | sudo tee "/etc/systemd/system/$unit" > /dev/null
+done
+sudo systemctl daemon-reload
+sudo systemctl enable --now openbrain-backup.timer
+echo "      Backup timer enabled (runs daily)."
+echo "      Run now: bash $SCRIPT_DIR/backup.sh"
+
 echo
 echo "=== Installation complete ==="
-echo "Connect Claude.ai: Settings → Connectors → Add MCP server"
-echo "URL: http://<tailscale-hostname>:8000"
+echo "Connect Claude.ai:  Settings → Connectors → Add MCP server"
+echo "URL:                http://<tailscale-hostname>/mcp"
+echo "Connect Claude Code: claude mcp add --transport http openbrain http://<tailscale-hostname>/mcp"

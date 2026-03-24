@@ -78,10 +78,92 @@ async def embed(text: str) -> list[float]:
         return embedding
 
 
+async def _enriched_entity_text(table: str, entity_id: str) -> str:
+    """Build a rich embedding text for a person or project by including related thoughts."""
+    pool = await get_pool()
+    if table == "people":
+        async with pool.acquire() as conn:
+            row = dict(await conn.fetchrow(
+                "SELECT name, affiliation, relationship, notes FROM people WHERE id = $1",
+                entity_id,
+            ))
+        base = await _entity_text("people", row)
+        name, kind = row["name"], "person"
+    else:
+        async with pool.acquire() as conn:
+            row = dict(await conn.fetchrow(
+                "SELECT name, description FROM projects WHERE id = $1", entity_id
+            ))
+        base = await _entity_text("projects", row)
+        name, kind = row["name"], "project"
+
+    thoughts = await thoughts_mentioning(name, kind, limit=10)
+    if thoughts:
+        snippets = " ".join(t["content"][:200] for t in thoughts)
+        return f"{base}. Related: {snippets}"
+    return base
+
+
+async def _refresh_entity_embedding(table: str, entity_id: str) -> None:
+    """Re-embed a single person or project with enriched context."""
+    text = await _enriched_entity_text(table, entity_id)
+    emb = await embed(text)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"UPDATE {table} SET embedding = $1 WHERE id = $2", emb, entity_id
+        )
+
+
+async def _refresh_mentioned_entities(people: list[str], projects: list[str]) -> None:
+    """Background task: re-embed people and projects mentioned in a new thought."""
+    pool = await get_pool()
+    for name in people:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id FROM people WHERE name ILIKE $1", f"%{name}%"
+            )
+        for row in rows:
+            try:
+                await _refresh_entity_embedding("people", str(row["id"]))
+            except Exception:
+                pass
+    for name in projects:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id FROM projects WHERE name ILIKE $1", f"%{name}%"
+            )
+        for row in rows:
+            try:
+                await _refresh_entity_embedding("projects", str(row["id"]))
+            except Exception:
+                pass
+
+
+async def refresh_all_embeddings(entity_type: str = "all") -> dict:
+    """Re-embed all people and/or projects with enriched context. Returns counts."""
+    pool = await get_pool()
+    counts: dict = {}
+    if entity_type in ("all", "people"):
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT id FROM people")
+        for row in rows:
+            await _refresh_entity_embedding("people", str(row["id"]))
+        counts["people"] = len(rows)
+    if entity_type in ("all", "projects"):
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT id FROM projects")
+        for row in rows:
+            await _refresh_entity_embedding("projects", str(row["id"]))
+        counts["projects"] = len(rows)
+    return counts
+
+
 async def store_thought(content: str, metadata: dict | None = None) -> str:
     """Embed and persist a thought. Returns the new UUID as a string."""
     pool = await get_pool()
     embedding = await embed(content)
+    meta = metadata or {}
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -91,9 +173,17 @@ async def store_thought(content: str, metadata: dict | None = None) -> str:
             """,
             content,
             embedding,
-            json.dumps(metadata or {}),
+            json.dumps(meta),
         )
-    return str(row["id"])
+    thought_id = str(row["id"])
+
+    # Re-embed mentioned entities in the background
+    people = meta.get("people") or []
+    projects = meta.get("projects") or []
+    if people or projects:
+        asyncio.create_task(_refresh_mentioned_entities(people, projects))
+
+    return thought_id
 
 
 async def search_thoughts_vec(
@@ -195,7 +285,7 @@ async def list_people(search: str | None = None) -> list[dict]:
 
 async def update_person(person_id: str, updates: dict) -> dict | None:
     """Update fields on a person row. Refreshes embedding. Returns updated row or None."""
-    allowed = {"name", "affiliation", "relationship", "notes"}
+    allowed = {"name", "affiliation", "relationship", "notes", "follow_up_date"}
     fields = {k: v for k, v in updates.items() if k in allowed}
     if not fields:
         return None
@@ -205,7 +295,7 @@ async def update_person(person_id: str, updates: dict) -> dict | None:
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             f"UPDATE people SET {set_clause} WHERE id = $1 "
-            "RETURNING id, name, affiliation, relationship, notes",
+            "RETURNING id, name, affiliation, relationship, notes, follow_up_date",
             *values,
         )
     if row:
@@ -714,6 +804,67 @@ async def search_brain(
     }
 
 
+async def add_person_note(name: str, note: str) -> dict:
+    """Capture a timestamped note about a person as a thought. Returns the person row."""
+    matches = await find_person_by_name(name)
+    if not matches:
+        raise ValueError(f"No person found matching '{name}'.")
+    if len(matches) > 1:
+        names = ", ".join(r["name"] for r in matches)
+        raise ValueError(f"Multiple matches: {names}. Please be more specific.")
+    person = matches[0]
+    await store_thought(
+        f"Note about {person['name']}: {note}",
+        {"type": "note", "source": "claude", "people": [person["name"]]},
+    )
+    return person
+
+
+async def get_person_profile(name: str) -> dict | None:
+    """Return a full profile: person record + thoughts mentioning them + co-occurrences."""
+    matches = await find_person_by_name(name)
+    if not matches:
+        return None
+    if len(matches) > 1:
+        return {"multiple": [r["name"] for r in matches]}
+    person = dict(matches[0])
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        person = dict(await conn.fetchrow(
+            "SELECT id, name, affiliation, relationship, notes, follow_up_date "
+            "FROM people WHERE id = $1",
+            person["id"],
+        ))
+
+    thoughts = await thoughts_mentioning(person["name"], "person", limit=50)
+    cooc = _extract_cooccurrences(thoughts, exclude=person["name"])
+
+    return {
+        "person": person,
+        "thoughts": thoughts,
+        "cooccurring_projects": cooc["projects"],
+        "cooccurring_people": cooc["people"],
+    }
+
+
+async def people_with_follow_ups(within_days: int = 7) -> list[dict]:
+    """Return people whose follow_up_date is today or within the next N days."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, name, affiliation, relationship, notes, follow_up_date
+            FROM people
+            WHERE follow_up_date IS NOT NULL
+              AND follow_up_date <= current_date + make_interval(days := $1)
+            ORDER BY follow_up_date
+            """,
+            within_days,
+        )
+    return [dict(r) for r in rows]
+
+
 async def thoughts_mentioning(
     name: str,
     entity_type: str = "any",
@@ -796,6 +947,7 @@ async def get_briefing(days: int = 1) -> dict:
 
     thoughts_list = [dict(r) for r in thoughts]
     cooc = _extract_cooccurrences(thoughts_list, exclude="")
+    follow_ups = await people_with_follow_ups(within_days=days)
 
     return {
         "days": days,
@@ -803,6 +955,7 @@ async def get_briefing(days: int = 1) -> dict:
         "thoughts": thoughts_list,
         "people": cooc["people"],
         "library": [dict(r) for r in library],
+        "follow_ups": follow_ups,
     }
 
 

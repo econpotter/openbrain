@@ -76,6 +76,18 @@ def register(mcp):
                 lines.append(line)
             sections.append("\n".join(lines))
 
+        # Follow-ups
+        if data["follow_ups"]:
+            lines = ["FOLLOW-UPS DUE:"]
+            for p in data["follow_ups"]:
+                due = p["follow_up_date"]
+                overdue = due < date.today()
+                tag = " ⚠ overdue" if overdue else ""
+                lines.append(f"  • {p['name']} — {due}{tag}")
+                if p["notes"]:
+                    lines.append(f"    {p['notes']}")
+            sections.append("\n".join(lines))
+
         # Footer hint for calendar
         sections.append(
             f"NOTE: Also check gcal_list_events for {since.isoformat()} to "

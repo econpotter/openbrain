@@ -7,6 +7,86 @@ import brain
 
 def register(mcp):
     @mcp.tool
+    async def refresh_embeddings(entity_type: str = "all") -> str:
+        """
+        Re-embed all people and/or projects using enriched context from related thoughts.
+
+        Run this after adding many thoughts or entities to ensure semantic search
+        reflects the latest context. Embeddings are also refreshed automatically
+        in the background whenever a thought is captured.
+
+        Args:
+            entity_type: "people", "projects", or "all". Default: all.
+        """
+        counts = await brain.refresh_all_embeddings(entity_type)
+        parts = [f"{v} {k}" for k, v in counts.items()]
+        return f"Re-embedded: {', '.join(parts)}."
+
+    @mcp.tool
+    async def add_note(person: str, note: str) -> str:
+        """
+        Add a timestamped note about a person.
+
+        The note is stored as a thought tagged to the person, so it appears in
+        search_brain, search_by_entity, and get_briefing automatically.
+
+        Args:
+            person: Name of the person (partial match).
+            note:   The note to record.
+        """
+        try:
+            p = await brain.add_person_note(person, note)
+            return f"Note added for {p['name']}."
+        except ValueError as e:
+            return str(e)
+
+    @mcp.tool
+    async def get_person(name: str) -> str:
+        """
+        Get a full profile for a person: their record, all notes and thoughts
+        mentioning them, and co-occurring projects and people.
+
+        Args:
+            name: Person's name (partial match).
+        """
+        result = await brain.get_person_profile(name)
+        if result is None:
+            return f"No person found matching '{name}'."
+        if "multiple" in result:
+            return f"Multiple matches: {', '.join(result['multiple'])}. Please be more specific."
+
+        p = result["person"]
+        lines = [f"## {p['name']}"]
+        if p["affiliation"]:
+            lines.append(f"Affiliation: {p['affiliation']}")
+        if p["relationship"]:
+            lines.append(f"Relationship: {p['relationship']}")
+        if p["follow_up_date"]:
+            lines.append(f"Follow-up: {p['follow_up_date']}")
+        if p["notes"]:
+            lines.append(f"Notes: {p['notes']}")
+
+        thoughts = result["thoughts"]
+        if thoughts:
+            lines.append(f"\n### Thoughts & notes ({len(thoughts)}):")
+            for t in thoughts:
+                ts = t["created_at"].strftime("%Y-%m-%d")
+                snippet = t["content"][:200].replace("\n", " ")
+                lines.append(f"  [{ts}] {snippet}")
+
+        if result["cooccurring_projects"]:
+            lines.append("\n### Co-occurring projects:")
+            for proj, count in result["cooccurring_projects"]:
+                lines.append(f"  {proj} ({count})")
+
+        if result["cooccurring_people"]:
+            lines.append("\n### Co-occurring people:")
+            for person, count in result["cooccurring_people"]:
+                lines.append(f"  {person} ({count})")
+
+        return "\n".join(lines)
+
+    @mcp.tool
     async def search_by_entity(
         name: str,
         entity_type: str = "any",
@@ -168,16 +248,18 @@ def register(mcp):
         affiliation: str | None = None,
         relationship: str | None = None,
         notes: str | None = None,
+        follow_up_date: str | None = None,
     ) -> str:
         """
         Update fields on a person record. Looks up the person by their current name.
 
         Args:
-            name:         Current name of the person to update.
-            new_name:     Rename to this value.
-            affiliation:  New affiliation.
-            relationship: New relationship type (collaborator | author | contact | advisor).
-            notes:        New notes.
+            name:           Current name of the person to update.
+            new_name:       Rename to this value.
+            affiliation:    New affiliation.
+            relationship:   New relationship type (collaborator | author | contact | advisor).
+            notes:          New notes (overwrites existing — use add_note to append).
+            follow_up_date: Schedule a follow-up as YYYY-MM-DD. Set to "" to clear.
         """
         matches = await brain.find_person_by_name(name)
         if not matches:
@@ -195,12 +277,15 @@ def register(mcp):
             updates["relationship"] = relationship
         if notes is not None:
             updates["notes"] = notes
+        if follow_up_date is not None:
+            updates["follow_up_date"] = follow_up_date or None
         if not updates:
             return "No fields to update."
         updated = await brain.update_person(str(person["id"]), updates)
         if not updated:
             return "Update failed."
-        return f"Updated: {updated['name']}"
+        fu = f" — follow-up: {updated['follow_up_date']}" if updated.get("follow_up_date") else ""
+        return f"Updated: {updated['name']}{fu}"
 
     @mcp.tool
     async def list_projects(status: str | None = None) -> str:

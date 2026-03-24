@@ -7,6 +7,50 @@ import brain
 
 def register(mcp):
     @mcp.tool
+    async def search_by_entity(
+        name: str,
+        entity_type: str = "any",
+        limit: int = 20,
+    ) -> str:
+        """
+        Find thoughts mentioning a person or project, and surface co-occurring
+        people and projects from those thoughts.
+
+        Answers questions like:
+          "What have I been thinking about w.r.t. Bert?"
+          "What people have been involved in the ai-outliers project?"
+          "What projects have I been talking about recently?" (use name="")
+
+        Args:
+            name:        Person or project name to search for (partial match).
+            entity_type: "person", "project", or "any". Default: any.
+            limit:       Max thoughts to retrieve. Default 20.
+        """
+        thoughts = await brain.thoughts_mentioning(name, entity_type, limit)
+        if not thoughts:
+            return f"No thoughts found mentioning '{name}'."
+
+        cooc = brain._extract_cooccurrences(thoughts, exclude=name)
+
+        lines = [f"Found {len(thoughts)} thought(s) mentioning '{name}':\n"]
+        for t in thoughts:
+            ts = t["created_at"].strftime("%Y-%m-%d")
+            snippet = t["content"][:200].replace("\n", " ")
+            lines.append(f"[{ts}] {snippet}")
+
+        if cooc["people"]:
+            lines.append("\nCo-occurring people:")
+            for person, count in cooc["people"]:
+                lines.append(f"  {person} ({count})")
+
+        if cooc["projects"]:
+            lines.append("\nCo-occurring projects:")
+            for project, count in cooc["projects"]:
+                lines.append(f"  {project} ({count})")
+
+        return "\n".join(lines)
+
+    @mcp.tool
     async def add_person(
         name: str,
         affiliation: str | None = None,

@@ -19,6 +19,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 import asyncpg
+import bibtexparser
 import pgvector.asyncpg
 from dotenv import load_dotenv
 
@@ -44,6 +45,49 @@ _STOPWORDS = frozenset({
 _DOI_RE = re.compile(r"\b(10\.\d{4,}(?:\.\d+)*/\S+)\b")
 
 _pool: asyncpg.Pool | None = None
+
+
+class NeedsMetadataError(Exception):
+    """Raised when no metadata could be resolved and none was provided."""
+
+
+def _parse_bibtex(bibtex_str: str) -> dict:
+    """Parse a BibTeX string and return a metadata dict."""
+    bib = bibtexparser.loads(bibtex_str)
+    if not bib.entries:
+        return {}
+    entry = bib.entries[0]
+
+    # Authors: "Last, First and Last, First" → ["First Last", ...]
+    raw_authors = entry.get("author", "")
+    authors = []
+    if raw_authors:
+        for part in re.split(r"\s+and\s+", raw_authors, flags=re.IGNORECASE):
+            part = part.strip()
+            if "," in part:
+                last, first = part.split(",", 1)
+                authors.append(f"{first.strip()} {last.strip()}")
+            else:
+                authors.append(part)
+
+    year_str = entry.get("year", "")
+    year = int(year_str) if year_str.isdigit() else None
+
+    source = (
+        entry.get("journal")
+        or entry.get("booktitle")
+        or entry.get("publisher")
+    )
+
+    return {
+        "title": entry.get("title", "").strip("{}"),
+        "authors": authors,
+        "year": year,
+        "source": source,
+        "abstract": entry.get("abstract"),
+        "doi": entry.get("doi"),
+        "bibtex": bibtex_str,
+    }
 _st_model = None
 
 
@@ -537,6 +581,8 @@ async def ingest_document_pipeline(
     filepath: str,
     doc_type: str = "paper",
     force: bool = False,
+    bibtex_str: str | None = None,
+    title: str | None = None,
 ) -> dict:
     """Full ingest pipeline: extract → CrossRef → copy → store → chunk+embed."""
     path = Path(filepath).expanduser().resolve()
@@ -569,20 +615,41 @@ async def ingest_document_pipeline(
         first_page = full_text[:3000]
 
     # Metadata via DOI → CrossRef
-    title = authors = year = source = abstract = doi = bibtex = None
+    resolved_title = authors = year = source = abstract = doi = bibtex = None
     authors = []
     doi = _extract_doi(first_page)
     if doi:
         meta = await loop.run_in_executor(None, _crossref_lookup, doi)
-        title = meta.get("title")
+        resolved_title = meta.get("title")
         authors = meta.get("authors") or []
         year = meta.get("year")
         source = meta.get("source")
         abstract = meta.get("abstract")
         bibtex = meta.get("bibtex")
 
-    if not title:
-        title = path.stem
+    # Fallback: user-supplied BibTeX
+    if not resolved_title and bibtex_str:
+        meta = _parse_bibtex(bibtex_str)
+        resolved_title = meta.get("title")
+        authors = meta.get("authors") or []
+        year = meta.get("year")
+        source = meta.get("source")
+        abstract = meta.get("abstract") or abstract
+        doi = meta.get("doi") or doi
+        bibtex = bibtex_str
+
+    # Fallback: user-supplied title
+    if not resolved_title and title:
+        resolved_title = title
+
+    # No metadata at all — ask the caller
+    if not resolved_title:
+        raise NeedsMetadataError(
+            "Could not resolve metadata for this document (no DOI found). "
+            "Please re-call with bibtex=<bibtex string> or title=<title>."
+        )
+
+    title = resolved_title
 
     # Copy to library directory
     LIBRARY_PATH.mkdir(parents=True, exist_ok=True)

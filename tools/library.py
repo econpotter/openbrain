@@ -10,24 +10,37 @@ import brain
 
 def register(mcp):
     @mcp.tool
-    async def ingest_document(filepath: str, doc_type: str = "paper", force: bool = False) -> str:
+    async def ingest_document(
+        filepath: str,
+        doc_type: str = "paper",
+        force: bool = False,
+        bibtex: str | None = None,
+        title: str | None = None,
+    ) -> str:
         """
         Ingest a single document into the library.
 
         Extracts text, looks up metadata via DOI → CrossRef, copies the file to
         LIBRARY_PATH with a standardized filename, chunks and embeds the content.
 
+        If no metadata can be resolved automatically, the tool returns a message
+        asking you to re-call with either bibtex or title supplied.
+
         Args:
             filepath:  Absolute or ~ path to the file (PDF or text).
             doc_type:  Type label — paper | report | documentation | data_dictionary | note | other.
             force:     Re-ingest even if the file has already been ingested.
+            bibtex:    BibTeX entry string to use when automatic metadata lookup fails.
+            title:     Plain title to use when automatic metadata lookup fails and no BibTeX is available.
         """
         path = Path(filepath).expanduser().resolve()
         try:
-            result = await brain.ingest_document_pipeline(filepath, doc_type, force)
+            result = await brain.ingest_document_pipeline(filepath, doc_type, force, bibtex, title)
         except FileNotFoundError as e:
             return str(e)
         except ValueError as e:
+            return str(e)
+        except brain.NeedsMetadataError as e:
             return str(e)
         finally:
             if str(path).startswith(tempfile.gettempdir()):
@@ -127,6 +140,7 @@ def register(mcp):
     @mcp.tool
     async def update_library(
         query: str,
+        bibtex: str | None = None,
         title: str | None = None,
         authors: str | None = None,
         year: int | None = None,
@@ -139,20 +153,25 @@ def register(mcp):
         """
         Update fields on a library record. Looks up by title, author, filepath, or DOI.
 
+        Supply bibtex to populate multiple fields at once from a BibTeX entry.
+        Any explicitly provided fields (title, authors, etc.) override the BibTeX values.
+
         The source field is automatically abbreviated (e.g. "Journal of Economic
         Perspectives" → "jour-econ-pers").
 
         Args:
             query:     Search term to identify the record (title fragment, author name,
                        filename slug like "Smith2020", or DOI).
-            title:     New title.
-            authors:   New authors as comma-separated string.
-            year:      New publication year.
-            source:    New source/journal (auto-abbreviated).
-            abstract:  New abstract.
+            bibtex:    BibTeX entry string — populates title, authors, year, source,
+                       abstract, doi, and bibtex fields in one go.
+            title:     New title (overrides bibtex).
+            authors:   New authors as comma-separated string (overrides bibtex).
+            year:      New publication year (overrides bibtex).
+            source:    New source/journal, auto-abbreviated (overrides bibtex).
+            abstract:  New abstract (overrides bibtex).
             doc_type:  New document type.
             status:    New status — ingested | reading | read | archived.
-            doi:       New DOI.
+            doi:       New DOI (overrides bibtex).
         """
         matches = await brain.find_library_records(query)
         if not matches:
@@ -163,6 +182,24 @@ def register(mcp):
 
         record = matches[0]
         updates: dict = {}
+
+        if bibtex is not None:
+            meta = brain._parse_bibtex(bibtex)
+            if meta.get("title"):
+                updates["title"] = meta["title"]
+            if meta.get("authors"):
+                updates["authors"] = meta["authors"]
+            if meta.get("year"):
+                updates["year"] = meta["year"]
+            if meta.get("source"):
+                updates["source"] = meta["source"]
+            if meta.get("abstract"):
+                updates["abstract"] = meta["abstract"]
+            if meta.get("doi"):
+                updates["doi"] = meta["doi"]
+            updates["bibtex"] = bibtex
+
+        # Explicit fields override bibtex
         if title is not None:
             updates["title"] = title
         if authors is not None:

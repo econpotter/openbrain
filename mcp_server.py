@@ -24,6 +24,7 @@ Open Brain is a personal AI memory and knowledge base. Use these patterns when i
 - "Remember that..." — call capture_thought AND save to local memory files.
 - Mentioning a project or person in a thought — if that project/person doesn't exist in the DB, call add_project or add_person first, then capture_thought.
 - "Ingest this file" from a remote client machine — SCP the file to the MCP server first, appending a random alphanumeric suffix to avoid collisions (e.g. scp reason:/path/to/paper.pdf rhyme:/tmp/paper-<random>.pdf), then call ingest_document(filepath="/tmp/paper-<random>.pdf"). The pipeline copies the file to LIBRARY_PATH with a standardized name and cleans up the tmp file automatically.
+- If ingest_document cannot resolve metadata (no DOI found), it will ask for a BibTeX entry or a plain title. Ask the user which they prefer, then re-call with bibtex=<bibtex string> or title=<title>.
 """.strip(),
 )
 

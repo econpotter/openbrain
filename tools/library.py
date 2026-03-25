@@ -4,6 +4,7 @@ tools/library.py — ingest_document, ingest_directory, search_library,
 """
 
 from pathlib import Path
+import tempfile
 import brain
 
 
@@ -21,12 +22,16 @@ def register(mcp):
             doc_type:  Type label — paper | report | documentation | data_dictionary | note | other.
             force:     Re-ingest even if the file has already been ingested.
         """
+        path = Path(filepath).expanduser().resolve()
         try:
             result = await brain.ingest_document_pipeline(filepath, doc_type, force)
         except FileNotFoundError as e:
             return str(e)
         except ValueError as e:
             return str(e)
+        finally:
+            if str(path).startswith(tempfile.gettempdir()):
+                path.unlink(missing_ok=True)
         return (
             f"Ingested: {result['title']}\n"
             f"Saved to: {result['filepath']}\n"

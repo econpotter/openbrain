@@ -47,10 +47,6 @@ _DOI_RE = re.compile(r"\b(10\.\d{4,}(?:\.\d+)*/\S+)\b")
 _pool: asyncpg.Pool | None = None
 
 
-class NeedsMetadataError(Exception):
-    """Raised when no metadata could be resolved and none was provided."""
-
-
 def _parse_bibtex(bibtex_str: str) -> dict:
     """Parse a BibTeX string and return a metadata dict."""
     bib = bibtexparser.loads(bibtex_str)
@@ -642,12 +638,10 @@ async def ingest_document_pipeline(
     if not resolved_title and title:
         resolved_title = title
 
-    # No metadata at all — ask the caller
-    if not resolved_title:
-        raise NeedsMetadataError(
-            "Could not resolve metadata for this document (no DOI found). "
-            "Please re-call with bibtex=<bibtex string> or title=<title>."
-        )
+    # Last resort: use filename stem; caller will be told to run update_library
+    metadata_missing = not resolved_title
+    if metadata_missing:
+        resolved_title = path.stem
 
     title = resolved_title
 
@@ -701,6 +695,7 @@ async def ingest_document_pipeline(
         "title": title,
         "filepath": str(dest),
         "chunks": len(chunks),
+        "metadata_missing": metadata_missing,
     }
 
 

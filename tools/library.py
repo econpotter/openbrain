@@ -40,16 +40,21 @@ def register(mcp):
             return str(e)
         except ValueError as e:
             return str(e)
-        except brain.NeedsMetadataError as e:
-            return str(e)
         finally:
             if str(path).startswith(tempfile.gettempdir()):
                 path.unlink(missing_ok=True)
-        return (
+        msg = (
             f"Ingested: {result['title']}\n"
             f"Saved to: {result['filepath']}\n"
             f"Chunks:   {result['chunks']}"
         )
+        if result.get("metadata_missing"):
+            msg += (
+                f"\n\nNo metadata found (no DOI detected). The record was saved with the "
+                f"filename as title. Ask the user for a BibTeX entry or a title, then call "
+                f"update_library(query=\"{result['title']}\", bibtex=...) to fix it."
+            )
+        return msg
 
     @mcp.tool
     async def ingest_directory(

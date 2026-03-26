@@ -204,16 +204,18 @@ async def store_thought(content: str, metadata: dict | None = None) -> str:
     pool = await get_pool()
     embedding = await embed(content)
     meta = metadata or {}
+    thought_type = meta.get("type", "thought")
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO thoughts (content, embedding, metadata)
-            VALUES ($1, $2, $3)
+            INSERT INTO thoughts (content, embedding, metadata, type)
+            VALUES ($1, $2, $3, $4)
             RETURNING id
             """,
             content,
             embedding,
             json.dumps(meta),
+            thought_type,
         )
     thought_id = str(row["id"])
 

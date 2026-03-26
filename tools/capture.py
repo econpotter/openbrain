@@ -24,7 +24,10 @@ def register(mcp):
 
         Args:
             content:  The full text of the thought or memory to preserve.
-            type:     One of: thought | memory | conversation | ingest_event | note
+            type:     One of: thought | note | memory | conversation | ingest_event.
+                      Default is "thought". Use "note" when the user says "capture notes
+                      about ...", "write up notes on ...", or otherwise signals long-form
+                      or structured notes rather than a quick observation.
             tags:     Freeform topic keywords (e.g. ["bandwidth", "kernel methods"]).
             people:   Names of people mentioned (e.g. ["Imbens", "Kalyanaraman"]).
             projects: Project names mentioned (e.g. ["SDC", "dissertation"]).

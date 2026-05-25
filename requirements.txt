@@ -2,7 +2,6 @@ fastmcp
 asyncpg
 pgvector
 pdfplumber
-sentence-transformers
 voyageai
 python-dotenv
 typer

@@ -69,6 +69,9 @@ echo "      Run now: bash $SCRIPT_DIR/backup.sh"
 
 echo
 echo "=== Installation complete ==="
-echo "Connect Claude.ai:  Settings → Connectors → Add MCP server"
-echo "URL:                http://<tailscale-hostname>/mcp"
-echo "Connect Claude Code: claude mcp add --transport http openbrain http://<tailscale-hostname>/mcp"
+echo "Next: set up HTTPS with Caddy (required for remote clients):"
+echo "      bash scripts/setup-caddy.sh <your-hostname>"
+echo
+echo "Then connect Claude.ai:   Settings → Connectors → Add MCP server"
+echo "URL:                      https://<your-hostname>/mcp"
+echo "Connect Claude Code:      claude mcp add --transport http openbrain https://<your-hostname>/mcp"

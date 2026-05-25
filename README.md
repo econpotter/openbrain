@@ -117,6 +117,44 @@ This takes a minute on first run. Subsequent starts load from the local cache at
 sudo systemctl status openbrain-mcp
 ```
 
+### 5b. Set up HTTPS with Caddy (VPN-only hosts)
+
+The MCP server runs inside Docker without a published port. A Caddy container on
+the same Docker network handles TLS termination and proxies to it.
+
+Set your hostname in `.env` next to `docker-compose.yaml`:
+
+```
+CADDY_HOSTNAME=potter.nicholas-fuji.nord
+```
+
+Then bring up (or restart) the stack:
+
+```bash
+docker compose up -d
+```
+
+Caddy uses `tls internal` — it generates its own CA and issues a cert for the
+hostname. You need to trust that CA cert once on each client machine:
+
+```bash
+# Extract the root cert from the running container
+docker exec caddy cat /data/caddy/pki/authorities/local/root.crt > caddy-root.crt
+
+# Copy caddy-root.crt to your client machine, then:
+
+# Linux
+sudo cp caddy-root.crt /usr/local/share/ca-certificates/caddy-root.crt
+sudo update-ca-certificates
+
+# macOS
+sudo security add-trusted-cert -d -r trustRoot \
+    -k /Library/Keychains/System.keychain caddy-root.crt
+```
+
+If your server is publicly reachable, remove the `tls internal` line from
+`Caddyfile` — Caddy will obtain a real Let's Encrypt certificate automatically.
+
 ### 6. Connect your AI clients
 
 Once the service is running, connect whichever clients you use.
@@ -125,7 +163,9 @@ Once the service is running, connect whichever clients you use.
 
 **Settings → Connectors → Add MCP server**
 
-URL: `http://<your-hostname>/mcp`
+URL: `https://<your-hostname>/mcp`
+
+Claude.ai requires HTTPS. Set up Caddy first (step 5b) if your host is VPN-only.
 
 #### Claude Code (CLI)
 

@@ -137,6 +137,10 @@ docker compose up -d
 Caddy uses `tls internal` — it generates its own CA and issues a cert for the
 hostname. You need to trust that CA cert once on each client machine:
 
+> **NordVPN meshnet users:** after bringing up the stack, also follow the
+> firewall step in [Troubleshooting → NordVPN meshnet](#nordvpn-meshnet-port-8443-times-out)
+> or port 8443 will silently time out despite appearing open.
+
 ```bash
 # Extract the root cert from the running container
 docker exec caddy cat /data/caddy/pki/authorities/local/root.crt > caddy-root.crt
@@ -320,6 +324,40 @@ python ingest.py paper.pdf --force    # re-ingest a duplicate
 | 3 | Entities (`add_person`, `add_project`, `list_people`, `list_projects`, `update_person`, `update_project`, `search_people`, `search_projects`, `search_by_entity`) | Complete |
 | 4 | Cross-table intelligence (`search_brain`, `get_briefing`) | Complete |
 | 5 | Hardening (systemd, daily backups, logging) | Complete |
+
+## Troubleshooting
+
+### NordVPN meshnet: port 8443 times out
+
+**Symptom:** `curl https://<hostname>:8443/mcp/` hangs at "Trying \<ip\>:8443". `ss
+-tlnp` shows the port listening. `tcpdump -i nordlynx port 8443` shows SYN
+packets arriving from the client, but no SYN-ACK is ever sent. SSH into the
+server works fine.
+
+**Root cause:** NordVPN inserts DROP rules into the iptables FORWARD chain that
+block traffic from the meshnet range (`100.64.0.0/10`) to private subnets,
+including the Docker bridge network (`172.16.0.0/12`). Docker uses DNAT to
+rewrite the destination from the host IP to the container IP before routing, so
+the packet travels through FORWARD (not INPUT). Standard firewall whitelists
+(ufw, `nordvpn whitelist add port`) only affect INPUT and have no effect here.
+NordVPN's DROP rules in FORWARD run before Docker's own rules, so the packet is
+dropped silently.
+
+**Fix:** Insert an iptables exception at the top of FORWARD, scoped to port 8443
+and the Docker bridge subnet, before NordVPN's drop rules:
+
+```bash
+sudo iptables -I FORWARD 1 -s 100.64.0.0/10 -d 172.18.0.0/16 -p tcp --dport 8443 -j ACCEPT
+```
+
+Persist it across reboots:
+
+```bash
+sudo iptables-save | sudo tee /etc/iptables/rules.v4
+```
+
+Verify by re-running the curl from the client — it should now complete the TLS
+handshake (assuming the Caddy CA cert is trusted on the client; see step 5b).
 
 ## Repository structure
 

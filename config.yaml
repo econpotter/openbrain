@@ -2,18 +2,23 @@
 # API keys and DATABASE_URL go in .env — not here.
 
 library_path: /mnt/data/openbrain/library
+litellm_url: http://litellm:4000
 
 embed:
   # Provider: voyage | openrouter | litellm
   provider: voyage
   model: voyage-large-2
-  litellm_url: http://litellm:4000
+  fallback:
+    provider: openrouter
+    model: moon8-embeddings
 
 maintenance:
   # Provider: openrouter | litellm
   provider: litellm
   model: moon8-fast
-  litellm_url: http://litellm:4000
+  fallback:
+    provider: openrouter
+    model: google/gemini-2.5-flash
   run_at: "02:00"
   lookback_hours: 24
   batch_size: 50

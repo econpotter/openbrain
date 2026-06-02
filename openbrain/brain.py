@@ -44,8 +44,6 @@ _cfg = _load_config()
 
 DATABASE_URL: str = os.environ["DATABASE_URL"]
 LIBRARY_PATH: Path = Path(os.getenv("LIBRARY_PATH", _cfg["library_path"])).expanduser()
-EMBED_PROVIDER: str = _cfg["embed"]["provider"]
-EMBED_MODEL: str = _cfg["embed"]["model"]
 MAINTENANCE_CONFIG: dict = _cfg.get("maintenance", {})
 
 _STOPWORDS = frozenset({
@@ -110,41 +108,61 @@ async def get_pool() -> asyncpg.Pool:
     return _pool
 
 
-async def embed(text: str) -> list[float]:
-    if EMBED_PROVIDER == "voyage":
+def _configs_with_fallback(config: dict) -> list[dict]:
+    fallback = config.get("fallback")
+    return [config, fallback] if fallback else [config]
+
+
+def _litellm_url(config: dict) -> str | None:
+    return config.get("litellm_url") or _cfg.get("litellm_url")
+
+
+async def _embed_with_config(text: str, config: dict) -> list[float]:
+    provider = config["provider"]
+    model = config["model"]
+    if provider == "voyage":
         import voyageai
         client = voyageai.AsyncClient(api_key=os.environ["VOYAGE_API_KEY"])
-        result = await client.embed([text], model=EMBED_MODEL)
+        result = await client.embed([text], model=model)
         return result.embeddings[0]
 
-    elif EMBED_PROVIDER == "openrouter":
+    if provider == "openrouter":
         from openai import AsyncOpenAI
         client = AsyncOpenAI(
             api_key=os.environ["OPENROUTER_API_KEY"],
             base_url="https://openrouter.ai/api/v1",
         )
-        result = await client.embeddings.create(input=[text], model=EMBED_MODEL)
+        result = await client.embeddings.create(input=[text], model=model)
         return result.data[0].embedding
 
-    elif EMBED_PROVIDER == "litellm":
+    if provider == "litellm":
         from openai import AsyncOpenAI
-        litellm_url = _cfg["embed"].get("litellm_url")
+        litellm_url = _litellm_url(config)
         if not litellm_url:
             raise ValueError(
-                "config.yaml: embed.litellm_url is required when embed.provider is litellm"
+                "config.yaml: litellm_url is required when embed.provider is litellm"
             )
         client = AsyncOpenAI(
             api_key=os.environ["LITELLM_API_KEY"],
             base_url=litellm_url,
         )
-        result = await client.embeddings.create(input=[text], model=EMBED_MODEL)
+        result = await client.embeddings.create(input=[text], model=model)
         return result.data[0].embedding
 
-    else:
-        raise ValueError(
-            f"Unknown embed.provider: {EMBED_PROVIDER!r}. "
-            "Expected one of: voyage, openrouter, litellm"
-        )
+    raise ValueError(
+        f"Unknown embed.provider: {provider!r}. "
+        "Expected one of: voyage, openrouter, litellm"
+    )
+
+
+async def embed(text: str) -> list[float]:
+    errors = []
+    for config in _configs_with_fallback(_cfg["embed"]):
+        try:
+            return await _embed_with_config(text, config)
+        except Exception as exc:
+            errors.append(f"{config['provider']}/{config['model']}: {exc}")
+    raise RuntimeError("All embedding providers failed: " + "; ".join(errors))
 
 
 async def _enriched_entity_text(table: str, entity_id: str) -> str:
@@ -346,18 +364,18 @@ def _maintenance_prompt(thoughts: list[dict]) -> str:
     return "\n".join(lines)
 
 
-async def complete_maintenance_prompt(prompt: str) -> str:
-    provider = MAINTENANCE_CONFIG.get("provider", "litellm")
-    model = MAINTENANCE_CONFIG.get("model")
+async def _complete_maintenance_with_config(prompt: str, config: dict) -> str:
+    provider = config.get("provider", "litellm")
+    model = config.get("model")
     if not model:
         raise ValueError("config.yaml: maintenance.model is required")
 
     if provider == "litellm":
-        base_url = MAINTENANCE_CONFIG.get("litellm_url")
+        base_url = _litellm_url(config)
         api_key_name = "LITELLM_API_KEY"
         if not base_url:
             raise ValueError(
-                "config.yaml: maintenance.litellm_url is required "
+                "config.yaml: litellm_url is required "
                 "when maintenance.provider is litellm"
             )
     elif provider == "openrouter":
@@ -384,9 +402,19 @@ async def complete_maintenance_prompt(prompt: str) -> str:
             },
             {"role": "user", "content": prompt},
         ],
-        temperature=MAINTENANCE_CONFIG.get("temperature", 0.2),
+        temperature=config.get("temperature", 0.2),
     )
     return (result.choices[0].message.content or "").strip()
+
+
+async def complete_maintenance_prompt(prompt: str) -> str:
+    errors = []
+    for config in _configs_with_fallback(MAINTENANCE_CONFIG):
+        try:
+            return await _complete_maintenance_with_config(prompt, config)
+        except Exception as exc:
+            errors.append(f"{config['provider']}/{config['model']}: {exc}")
+    raise RuntimeError("All maintenance providers failed: " + "; ".join(errors))
 
 
 async def archive_thoughts(thought_ids: list[str], maintenance_run_id: str) -> None:

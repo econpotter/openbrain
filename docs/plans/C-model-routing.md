@@ -22,10 +22,11 @@ breaks. Set `embed.provider` and `embed.model` in `config.yaml` to one
 consistent source:
 
 ```yaml
+litellm_url: http://litellm:4000
+
 embed:
   provider: litellm          # or: voyage, openrouter
   model: <1536-dimensional-embedding-model>
-  litellm_url: http://litellm:4000
 ```
 
 If switching from a previous backend with a different dimension, follow the migration steps in `docs/design/model-config.md` (re-embed all vectors, add dimension migration).

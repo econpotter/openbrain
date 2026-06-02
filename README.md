@@ -47,7 +47,7 @@ AI. OpenRouter and an OpenAI-compatible LiteLLM gateway are also supported.
 |----------|---------------|---------------|
 | Voyage AI (default) | `voyage-large-2` | `VOYAGE_API_KEY` |
 | OpenRouter | Configured in `config.yaml` | `OPENROUTER_API_KEY` |
-| LiteLLM | Configured in `config.yaml` | `LITELLM_API_KEY` and `embed.litellm_url` |
+| LiteLLM | Configured in `config.yaml` | `LITELLM_API_KEY` and top-level `litellm_url` |
 
 The initial schema uses 1536-dimensional vectors to match `voyage-large-2`.
 Changing to a model with a different output dimension requires a schema change
@@ -258,6 +258,8 @@ Embedding provider and model selection live in `config.yaml`. API keys stay in
 
 ```yaml
 # config.yaml
+litellm_url: http://litellm:4000
+
 embed:
   provider: voyage
   model: voyage-large-2
@@ -269,7 +271,7 @@ VOYAGE_API_KEY=your_key_here
 ```
 
 To route embeddings through OpenRouter or LiteLLM, update `embed.provider`,
-`embed.model`, and, for LiteLLM, `embed.litellm_url`. See
+`embed.model`, and, for LiteLLM, top-level `litellm_url`. See
 `docs/design/model-config.md`.
 
 If you switch models after storing data, existing vectors and new vectors
@@ -284,10 +286,11 @@ then consolidates recent unarchived thoughts with the configured maintenance
 model.
 
 ```yaml
+litellm_url: http://litellm:4000
+
 maintenance:
   provider: litellm
   model: <local-or-remote-chat-model>
-  litellm_url: http://litellm:4000
   run_at: "02:00"
   lookback_hours: 24
   batch_size: 50

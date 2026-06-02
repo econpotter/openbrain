@@ -174,6 +174,62 @@ class StoreThoughtTests(unittest.IsolatedAsyncioTestCase):
         refresh.assert_awaited_once_with(["Ada", "Grace"], [])
 
 
+class ModelFallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_embed_uses_fallback_when_primary_fails(self):
+        embed_config = {
+            "provider": "voyage",
+            "model": "primary",
+            "fallback": {"provider": "litellm", "model": "fallback"},
+        }
+        calls = []
+
+        async def _embed(_, config):
+            calls.append(config["model"])
+            if config["model"] == "primary":
+                raise RuntimeError("primary unavailable")
+            return [0.1, 0.2]
+
+        with (
+            patch.object(brain, "_cfg", {"embed": embed_config, "litellm_url": "http://litellm:4000"}),
+            patch.object(brain, "_embed_with_config", _embed),
+        ):
+            result = await brain.embed("test")
+
+        self.assertEqual(result, [0.1, 0.2])
+        self.assertEqual(calls, ["primary", "fallback"])
+
+    async def test_litellm_url_comes_from_top_level_config(self):
+        config = {"provider": "litellm", "model": "model"}
+        with patch.object(brain, "_cfg", {"litellm_url": "http://litellm:4000"}):
+            self.assertEqual(
+                brain._litellm_url(config),
+                "http://litellm:4000",
+            )
+
+    async def test_maintenance_uses_fallback_when_primary_fails(self):
+        config = {
+            "provider": "litellm",
+            "model": "primary",
+            "fallback": {"provider": "openrouter", "model": "fallback"},
+        }
+        calls = []
+
+        async def _complete(_, provider_config):
+            calls.append(provider_config["model"])
+            if provider_config["model"] == "primary":
+                raise RuntimeError("primary unavailable")
+            return "fallback synthesis"
+
+        with (
+            patch.object(brain, "MAINTENANCE_CONFIG", config),
+            patch.object(brain, "_complete_maintenance_with_config", _complete),
+        ):
+            result = await brain.complete_maintenance_prompt("prompt")
+
+        self.assertEqual(result, "fallback synthesis")
+        self.assertEqual(calls, ["primary", "fallback"])
+
+
 class IngestPipelineTests(unittest.IsolatedAsyncioTestCase):
     async def test_document_ingest_routes_event_through_store_thought(self):
         connection = _IngestConnection()

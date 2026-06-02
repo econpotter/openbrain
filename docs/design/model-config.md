@@ -38,9 +38,14 @@ provider SDK directly.
 The default configuration is:
 
 ```yaml
+litellm_url: http://litellm:4000
+
 embed:
   provider: voyage
   model: voyage-large-2
+  fallback:
+    provider: litellm
+    model: <1536-dimensional-embedding-model>
 ```
 
 The current schema uses `VECTOR(1536)` to match `voyage-large-2`.
@@ -48,13 +53,18 @@ The current schema uses `VECTOR(1536)` to match `voyage-large-2`.
 Local sentence-transformers embeddings are not implemented. They may be added
 later as another provider, but they are not a supported configuration today.
 
+An optional `embed.fallback` can be configured with the same provider keys. The
+fallback is tried only if the primary embedding call raises an error. The
+fallback embedding model must return the same vector dimension as the primary
+model and schema.
+
 ---
 
 ## LiteLLM
 
 LiteLLM is one supported routing option, not a requirement. When
 `embed.provider: litellm`, embedding calls go through the OpenAI-compatible
-proxy configured at `embed.litellm_url`. Direct Voyage AI and OpenRouter calls
+proxy configured by top-level `litellm_url`. Direct Voyage AI and OpenRouter calls
 remain valid alternatives.
 
 ---
@@ -85,10 +95,14 @@ People and project embeddings are not just their structured fields. They incorpo
 Nightly thought consolidation uses the `maintenance` section in `config.yaml`:
 
 ```yaml
+litellm_url: http://litellm:4000
+
 maintenance:
   provider: litellm
   model: <local-or-remote-chat-model>
-  litellm_url: http://litellm:4000
+  fallback:
+    provider: openrouter
+    model: <remote-chat-model>
   run_at: "02:00"
   lookback_hours: 24
   batch_size: 50
@@ -97,3 +111,6 @@ maintenance:
 The maintenance model does not need to match the embedding model. It reads raw
 thoughts, writes synthesized memories as `type: synthesis`, and marks processed
 inputs with `metadata.archived = true`.
+
+An optional `maintenance.fallback` can be configured with the same provider
+keys. It is used if the primary maintenance chat model fails.

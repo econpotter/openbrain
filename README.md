@@ -218,18 +218,23 @@ Then verify the connection:
 claude mcp list
 ```
 
-#### Project instruction (Claude.ai)
+#### Auto-capture instructions
 
-To make Claude automatically preserve memories at the end of conversations,
-add this to your Claude.ai project instructions:
+To make agents preserve useful memories automatically, install the instruction
+text from `docs/agent-instructions/auto-capture.md` into the global or
+project-level instructions for each agent you use.
 
-```
-At the end of our conversation, or when I say "remember this", call
-capture_thought to store a distilled summary of any facts, decisions, or
-insights worth preserving. Extract people, projects, and topics from the
-content and include them in metadata. Link to relevant library entries
-where applicable.
-```
+Common targets:
+
+- Codex global: `~/.codex/AGENTS.md`
+- Claude Code global: `~/.claude/CLAUDE.md`
+- Repo-local: `AGENTS.md` or `CLAUDE.md`
+- Claude.ai web: project instructions or custom instructions
+- Custom harnesses: the system or developer prompt builder
+
+For clients that support lifecycle hooks, adapt the templates in `docs/hooks/`.
+Hooks are the more reliable layer for session-start recall and session-end
+capture; instructions alone depend on the agent remembering to act.
 
 ## Manual deployment (without the installer)
 

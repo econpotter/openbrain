@@ -27,7 +27,7 @@ echo "[2/4] Checking .env..."
 if [ ! -f "$PROJECT_DIR/.env" ]; then
     cp "$PROJECT_DIR/.env.example" "$PROJECT_DIR/.env"
     echo "      Created .env from .env.example."
-    echo "      *** Fill in DATABASE_URL and VOYAGE_API_KEY before continuing. ***"
+    echo "      *** Fill in DATABASE_URL and the API key for embed.provider before continuing. ***"
     echo "      Then re-run this script."
     exit 0
 else
@@ -35,7 +35,7 @@ else
 fi
 
 # ── 3. Database ───────────────────────────────────────────────────────────────
-echo "[3/4] Applying database migrations..."
+echo "[3/4] Installing core database schema..."
 bash "$SCRIPT_DIR/setup_db.sh"
 
 # ── 4. systemd service ────────────────────────────────────────────────────────
@@ -73,5 +73,5 @@ echo "Next: set up HTTPS with Caddy (required for remote clients):"
 echo "      bash scripts/setup-caddy.sh <your-hostname>"
 echo
 echo "Then connect Claude.ai:   Settings → Connectors → Add MCP server"
-echo "URL:                      https://<your-hostname>/mcp"
-echo "Connect Claude Code:      claude mcp add --transport http openbrain https://<your-hostname>/mcp"
+echo "URL:                      https://<your-hostname>:8443/mcp"
+echo "Connect Claude Code:      claude mcp add --transport http openbrain https://<your-hostname>:8443/mcp"

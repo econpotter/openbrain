@@ -58,15 +58,68 @@ def register(mcp):
         return "\n\n".join(lines)
 
     @mcp.tool
+    async def get_thought_connections(
+        thought_id: str,
+        limit: int = 20,
+        include_restricted: bool = False,
+    ) -> str:
+        """
+        Find memories connected to a specific thought through shared metadata.
+
+        Results are ranked by overlap across topics, tags, people, and projects.
+        Restricted thoughts are excluded unless explicitly requested.
+
+        Args:
+            thought_id:          UUID of the source thought.
+            limit:               Maximum number of connected thoughts. Default 20.
+            include_restricted:  Include restricted thoughts. Default false.
+        """
+        results = await brain.get_thought_connections(
+            thought_id,
+            limit,
+            include_restricted,
+        )
+        if not results:
+            return "No connected thoughts found."
+        lines = []
+        for r in results:
+            shared = []
+            for key in ("topics", "tags", "people", "projects"):
+                values = r.get(f"shared_{key}") or []
+                if values:
+                    shared.append(f"{key}: {', '.join(values)}")
+            lines.append(
+                f"[{r['overlap_count']} overlap] {r['preview']}\n"
+                f"  Shared: {'; '.join(shared)}"
+            )
+        return "\n\n".join(lines)
+
+    @mcp.tool
     async def get_stats() -> str:
         """
-        Return row counts and recent activity summary for the brain database.
+        Return row counts and grouped activity statistics for the brain database.
         """
         stats = await brain.table_stats()
         lines = [
             f"Thoughts total:    {stats['thoughts_total']}",
             f"Thoughts last 24h: {stats['thoughts_last_24h']}",
         ]
-        if stats["library_total"] is not None:
-            lines.append(f"Library documents: {stats['library_total']}")
+        lines.append(f"Library documents: {stats['library_total']}")
+        for label, key in (
+            ("Types", "types"),
+            ("Tags", "tags"),
+            ("Topics", "topics"),
+            ("Sources", "sources"),
+            ("Sensitivity tiers", "sensitivity_tiers"),
+        ):
+            values = stats.get(key) or {}
+            if values:
+                summary = ", ".join(
+                    f"{name}: {count}"
+                    for name, count in sorted(
+                        values.items(),
+                        key=lambda item: (-item[1], item[0]),
+                    )
+                )
+                lines.append(f"{label}: {summary}")
         return "\n".join(lines)

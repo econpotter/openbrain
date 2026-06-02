@@ -43,7 +43,7 @@ def _load_config() -> dict:
 _cfg = _load_config()
 
 DATABASE_URL: str = os.environ["DATABASE_URL"]
-LIBRARY_PATH: Path = Path(_cfg["library_path"]).expanduser()
+LIBRARY_PATH: Path = Path(os.getenv("LIBRARY_PATH", _cfg["library_path"])).expanduser()
 EMBED_PROVIDER: str = _cfg["embed"]["provider"]
 EMBED_MODEL: str = _cfg["embed"]["model"]
 
@@ -227,24 +227,22 @@ async def store_thought(content: str, metadata: dict | None = None) -> str:
     pool = await get_pool()
     embedding = await embed(content)
     meta = metadata or {}
-    thought_type = meta.get("type", "thought")
+    thought_type = meta.get("type")
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
+        result = await conn.fetchval(
             """
-            INSERT INTO thoughts (content, embedding, metadata, type)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id
+            SELECT upsert_thought($1, $2, $3::jsonb, $4)
             """,
             content,
             embedding,
             json.dumps(meta),
             thought_type,
         )
-    thought_id = str(row["id"])
+    thought_id = str(result["id"])
 
     people = meta.get("people") or []
     projects = meta.get("projects") or []
-    if people or projects:
+    if result["metadata_changed"] and (people or projects):
         asyncio.create_task(_refresh_mentioned_entities(people, projects))
 
     return thought_id
@@ -263,6 +261,22 @@ async def search_thoughts_vec(
             embedding,
             threshold,
             count,
+        )
+    return [dict(r) for r in rows]
+
+
+async def get_thought_connections(
+    thought_id: str,
+    limit: int = 20,
+    include_restricted: bool = False,
+) -> list[dict]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM get_thought_connections($1, $2, $3)",
+            thought_id,
+            limit,
+            not include_restricted,
         )
     return [dict(r) for r in rows]
 
@@ -972,10 +986,10 @@ def _extract_cooccurrences(thoughts: list[dict], exclude: str) -> dict:
         if isinstance(meta, str):
             meta = json.loads(meta)
         for p in meta.get("people", []):
-            if exclude.lower() not in p.lower():
+            if not exclude or exclude.lower() not in p.lower():
                 people[p] = people.get(p, 0) + 1
         for p in meta.get("projects", []):
-            if exclude.lower() not in p.lower():
+            if not exclude or exclude.lower() not in p.lower():
                 projects[p] = projects.get(p, 0) + 1
     return {
         "people": sorted(people.items(), key=lambda x: -x[1]),
@@ -1026,17 +1040,5 @@ async def get_briefing(days: int = 1) -> dict:
 async def table_stats() -> dict:
     pool = await get_pool()
     async with pool.acquire() as conn:
-        thoughts_total = await conn.fetchval("SELECT count(*) FROM thoughts")
-        thoughts_24h = await conn.fetchval(
-            "SELECT count(*) FROM thoughts "
-            "WHERE created_at >= now() - interval '24 hours'"
-        )
-        try:
-            library_total = await conn.fetchval("SELECT count(*) FROM library")
-        except Exception:
-            library_total = None
-    return {
-        "thoughts_total": thoughts_total,
-        "thoughts_last_24h": thoughts_24h,
-        "library_total": library_total,
-    }
+        stats = await conn.fetchval("SELECT brain_stats_aggregate()")
+    return dict(stats)

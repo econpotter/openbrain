@@ -2,7 +2,9 @@
 
 ## Overview
 
-Documents enter Open Brain through `ingest_document` (MCP tool) or `ingest.py` (local CLI). Both use the same pipeline in `brain.ingest_document_pipeline()`.
+Documents enter Open Brain through `ingest_document` (MCP tool) or the
+`python -m openbrain.cli` local CLI. Both use the same pipeline in
+`brain.ingest_document_pipeline()`.
 
 ```
 Input file (PDF or text)
@@ -68,7 +70,8 @@ ingest_document(filepath="/tmp/paper-abc123.pdf")
 
 ## Ingest event
 
-Every successful ingest writes a thought with `type: ingest_event`:
+Every successful ingest routes a thought with `type: ingest_event` through the
+canonical `store_thought()` / `upsert_thought(...)` path:
 
 ```
 "Ingested: Imbens & Kalyanaraman 2012 — Optimal Bandwidth Choice for the Regression Discontinuity Estimator"

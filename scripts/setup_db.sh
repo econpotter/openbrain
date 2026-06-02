@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup_db.sh — Apply all migrations in order.
+# setup_db.sh — Install the clean core schema in order.
 # Run from the project root after filling in .env.
 set -euo pipefail
 
@@ -22,11 +22,11 @@ if [ -z "${DATABASE_URL:-}" ]; then
     exit 1
 fi
 
-echo "Applying migrations to: $DATABASE_URL"
+echo "Installing core schema in: $DATABASE_URL"
 
-for migration in "$PROJECT_DIR"/migrations/*.sql; do
-    echo "  → $(basename "$migration")"
-    psql "$DATABASE_URL" -f "$migration"
+for schema in "$PROJECT_DIR"/schemas/core/*.sql; do
+    echo "  → $(basename "$schema")"
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$schema"
 done
 
 echo "Database setup complete."

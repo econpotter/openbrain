@@ -27,9 +27,9 @@ Claude.ai / Gemini
     └── MCP server  (Python/FastMCP, port 8000)
            └── brain.py  (core logic)
                   ├── Postgres + pgvector  (structured records + vector search)
-                  └── Voyage AI            (embeddings)
+                  └── Embedding provider    (Voyage AI, OpenRouter, or LiteLLM)
 
-ingest.py  (local script for adding PDFs and documents)
+python -m openbrain.cli  (local CLI for adding PDFs and documents)
 ```
 
 ## Prerequisites
@@ -37,15 +37,21 @@ ingest.py  (local script for adding PDFs and documents)
 - Linux machine (the server that will host the brain)
 - Python 3.11+
 - PostgreSQL 15+ with the [pgvector](https://github.com/pgvector/pgvector) extension
-- Network access from your client machines to the server on port 8000
+- Network access from your client machines to the server on port 8000 for
+  direct HTTP, or port 8443 when using the bundled Caddy TLS proxy
 
-**Embeddings** are used to power semantic search. The default backend is a free
-local model that runs on the server. A paid API is available as an alternative.
+**Embeddings** are used to power semantic search. The default provider is Voyage
+AI. OpenRouter and an OpenAI-compatible LiteLLM gateway are also supported.
 
-| Backend | Model | Cost | Requires internet |
-|---------|-------|------|-------------------|
-| Local (default) | `BAAI/bge-large-en-v1.5` via sentence-transformers | Free | No |
-| Voyage AI | `voyage-large-2` | Paid API | Yes |
+| Provider | Default model | Configuration |
+|----------|---------------|---------------|
+| Voyage AI (default) | `voyage-large-2` | `VOYAGE_API_KEY` |
+| OpenRouter | Configured in `config.yaml` | `OPENROUTER_API_KEY` |
+| LiteLLM | Configured in `config.yaml` | `LITELLM_API_KEY` and `embed.litellm_url` |
+
+The initial schema uses 1536-dimensional vectors to match `voyage-large-2`.
+Changing to a model with a different output dimension requires a schema change
+and re-embedding existing records.
 
 ### Install PostgreSQL and pgvector
 
@@ -80,7 +86,7 @@ bash scripts/install.sh
 The installer will:
 1. Create a Python virtual environment and install dependencies
 2. Create `.env` from `.env.example` and **pause** — you must fill in credentials
-3. Apply all database migrations
+3. Install the core database schema
 4. Install and start the `openbrain-mcp` systemd service
 
 ### 3. Fill in credentials
@@ -98,29 +104,18 @@ Then re-run the installer to continue:
 bash scripts/install.sh
 ```
 
-### 4. Download the embedding model
-
-The local embedding model (~1.3 GB) is downloaded once and cached on the server.
-Run this after installing dependencies:
-
-```bash
-source .venv/bin/activate
-python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-large-en-v1.5')"
-```
-
-This takes a minute on first run. Subsequent starts load from the local cache at
-`~/.cache/huggingface/`.
-
-### 5. Verify the service is running
+### 4. Verify the service is running
 
 ```bash
 sudo systemctl status openbrain-mcp
 ```
 
-### 5b. Set up HTTPS with Caddy (VPN-only hosts)
+### 4b. Set up HTTPS with Caddy (Docker deployment on VPN-only hosts)
 
-The MCP server runs inside Docker without a published port. A Caddy container on
-the same Docker network handles TLS termination and proxies to it.
+The repository-level `docker-compose.yaml` runs the MCP server, Postgres, and
+Caddy together. Caddy terminates TLS on port 8443 and proxies to the MCP server
+on the Docker network. This is an alternative to running the MCP server through
+the systemd service installed above.
 
 Set your hostname in `.env` next to `docker-compose.yaml`:
 
@@ -133,6 +128,19 @@ Then bring up (or restart) the stack:
 ```bash
 docker compose up -d
 ```
+
+On first start with a new PostgreSQL volume, Docker installs
+`schemas/core/*.sql` automatically. To test the schema without retaining a
+database volume or starting the full stack:
+
+```bash
+bash openbrain/scripts/run-tests.sh --postgres
+```
+
+This runs the Python-level tests, then starts an ephemeral PostgreSQL + pgvector
+container, checks the schema and duplicate-merge behavior, and removes the
+container afterward. Use `bash openbrain/scripts/run-tests.sh` when you only
+want the Python-level checks.
 
 Caddy uses `tls internal` — it generates its own CA and issues a cert for the
 hostname. You need to trust that CA cert once on each client machine:
@@ -159,7 +167,7 @@ sudo security add-trusted-cert -d -r trustRoot \
 If your server is publicly reachable, remove the `tls internal` line from
 `Caddyfile` — Caddy will obtain a real Let's Encrypt certificate automatically.
 
-### 6. Connect your AI clients
+### 5. Connect your AI clients
 
 Once the service is running, connect whichever clients you use.
 
@@ -167,16 +175,16 @@ Once the service is running, connect whichever clients you use.
 
 **Settings → Connectors → Add MCP server**
 
-URL: `https://<your-hostname>/mcp`
+URL: `https://<your-hostname>:8443/mcp`
 
-Claude.ai requires HTTPS. Set up Caddy first (step 5b) if your host is VPN-only.
+Claude.ai requires HTTPS. Set up Caddy first (step 4b) if your host is VPN-only.
 
 #### Claude Code (CLI)
 
 Use 
 
 ```bash
-claude mcp add --transport http openbrain https://<your server>/mcp
+claude mcp add --transport http openbrain https://<your-hostname>:8443/mcp
 ``` 
 
 to add directly, or add the server to `~/.claude/settings.json` on your client machine:
@@ -186,7 +194,7 @@ to add directly, or add the server to `~/.claude/settings.json` on your client m
   "mcpServers": {
     "openbrain": {
       "type": "http",
-      "url": "https://<your-hostname>/mcp"
+      "url": "https://<your-hostname>:8443/mcp"
     }
   }
 }
@@ -222,30 +230,39 @@ pip install -r requirements.txt
 
 # 2. Configure
 cp .env.example .env
-# edit .env with your DATABASE_URL and VOYAGE_API_KEY
+# edit .env with your DATABASE_URL and the key for your configured embed provider
 
-# 3. Apply migrations
+# 3. Install the core database schema
 bash scripts/setup_db.sh
 
 # 4. Start the MCP server
-MCP_TRANSPORT=http python mcp_server.py
+MCP_TRANSPORT=http python -m openbrain.server
 ```
 
-## Using Voyage AI instead of the local model
+## Changing the embedding provider
 
-If you prefer faster embedding (useful when ingesting large document batches),
-set `EMBED_BACKEND=voyage` in `.env` and add your API key:
+Embedding provider and model selection live in `config.yaml`. API keys stay in
+`.env`. The default is:
 
+```yaml
+# config.yaml
+embed:
+  provider: voyage
+  model: voyage-large-2
 ```
-EMBED_BACKEND=voyage
+
+```dotenv
+# .env
 VOYAGE_API_KEY=your_key_here
-VOYAGE_MODEL=voyage-large-2
 ```
 
-Note: if you switch backends after storing data, existing vectors and new vectors
+To route embeddings through OpenRouter or LiteLLM, update `embed.provider`,
+`embed.model`, and, for LiteLLM, `embed.litellm_url`. See
+`docs/design/model-config.md`.
+
+If you switch models after storing data, existing vectors and new vectors
 will be from different models and semantic search results will be unreliable.
-Re-embed all content by re-ingesting documents and re-running `capture_thought`
-on existing thoughts, or wipe and rebuild the database.
+If the output dimension also changes, update the schema before re-embedding.
 
 ## Backup and restore
 
@@ -304,15 +321,15 @@ inspector or a local Claude Code session):
 
 ```bash
 source .venv/bin/activate
-python mcp_server.py   # MCP_TRANSPORT defaults to stdio
+python -m openbrain.server   # MCP_TRANSPORT defaults to stdio
 ```
 
 Ingest a document:
 
 ```bash
-python ingest.py paper.pdf
-python ingest.py papers/              # whole directory
-python ingest.py paper.pdf --force    # re-ingest a duplicate
+python -m openbrain.cli paper.pdf
+python -m openbrain.cli papers/              # whole directory
+python -m openbrain.cli paper.pdf --force    # re-ingest a duplicate
 ```
 
 ## Implementation status
@@ -408,13 +425,14 @@ curl -s https://potter.nicholas-fuji.nord:8443/mcp/
 ## Repository structure
 
 ```
-migrations/          SQL migration files, applied in order by setup_db.sh
-brain.py             Core logic: embed, store, retrieve
-mcp_server.py        FastMCP server entry point
-ingest.py            Standalone script for ingesting documents
+openbrain/
+  brain.py           Core logic: embed, store, retrieve
+  server.py          FastMCP server entry point
+  cli.py             Standalone CLI for ingesting documents
+schemas/core/        Clean install-time SQL baseline, applied in numeric order
 tools/               MCP tool implementations, one file per tool group
 scripts/
-  setup_db.sh                 Apply all migrations
+  setup_db.sh                 Install the core database schema
   install.sh                  Full install: venv, .env, DB, systemd, backup timer
   backup.sh                   Back up database and library files
   openbrain-mcp.service       systemd unit template for MCP server

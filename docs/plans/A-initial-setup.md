@@ -1,5 +1,10 @@
 # Open Brain — Implementation Plan
 
+> **Historical plan.** This document records the initial implementation sketch.
+> For the current architecture and commands, use `README.md` and
+> `ARCHITECTURE.md`. The pre-alpha schema redesign is tracked in
+> `docs/plans/B-ob1-adoption.md`.
+
 > Personal AI memory and knowledge base. One Postgres database, one MCP server,
 > any AI can plug in. No middleware, no SaaS. Interact entirely through Claude.ai
 > or Gemini with the MCP connected — the AI mediates all reads and writes.
@@ -439,4 +444,3 @@ rich
   summaries all write to `thoughts`. No separate audit log needed.
 - **Tailscale over nginx** — no SSL cert management, no public exposure, no port
   forwarding. The MCP server runs on plain HTTP within the tailnet.
-

@@ -1,4 +1,4 @@
-# Plan C: Auto-Capture Protocol
+# Plan D: Auto-Capture Protocol
 
 ## Goal
 
@@ -58,5 +58,6 @@ This ensures that even sessions that end abruptly leave a trace in the memory st
 ## Notes
 
 - The memory prompt works best when the MCP server is listed first in the agent's tool configuration — it ensures `search_brain` is available before the agent starts reasoning.
-- Captured thoughts land in `thoughts` with `type: raw`. The nightly cron (Plan B) consolidates these into `type: synthesis` entries automatically.
+- Captured thoughts land in `thoughts` with `type: raw`. The planned nightly
+  cron (Plan C) will consolidate these into `type: synthesis` entries.
 - Don't over-specify what to capture in the system prompt. Giving the agent a short list of categories (`constraints`, `fixes`, `preferences`, `milestones`) works better than long rules.

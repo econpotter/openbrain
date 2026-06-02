@@ -10,4 +10,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Run the MCP server
-CMD ["python", "mcp_server.py"]
+CMD ["python", "-m", "openbrain.server"]

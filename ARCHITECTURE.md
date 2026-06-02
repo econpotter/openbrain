@@ -29,13 +29,13 @@ The core abstraction is the **thought** — an append-only record of anything wo
 
 | Component | Responsibility | Key files |
 |-----------|---------------|-----------|
-| **brain.py** | Core logic: embed, store, retrieve. All database access. Async, uses asyncpg. | `brain.py` |
-| **MCP server** | FastMCP server exposing tools to Claude/Gemini via stdio or HTTP. | `mcp_server.py` |
-| **tools/** | One file per tool group; each exports a `register(mcp)` function. | `tools/capture.py`, `tools/search.py`, `tools/library.py`, `tools/entities.py`, `tools/briefing.py` |
-| **ingest.py** | Standalone CLI for ingesting documents from the local filesystem. | `ingest.py` |
-| **migrations/** | Numbered SQL migration files applied in order. Never edited after applied. | `migrations/` |
+| **brain.py** | Core logic: embed, store, retrieve. All database access. Async, uses asyncpg. | `openbrain/brain.py` |
+| **MCP server** | FastMCP server exposing tools to Claude/Gemini via stdio or HTTP. | `openbrain/server.py` |
+| **tools/** | One file per tool group; each exports a `register(mcp)` function. | `openbrain/tools/capture.py`, `openbrain/tools/search.py`, `openbrain/tools/library.py`, `openbrain/tools/entities.py`, `openbrain/tools/briefing.py` |
+| **ingest CLI** | Standalone CLI for ingesting documents from the local filesystem. | `openbrain/cli.py` |
+| **schemas/core/** | Clean SQL baseline for initializing a new Open Brain database. | `schemas/core/` |
 | **Postgres + pgvector** | Storage: structured rows + vector indexes for semantic search. | (external) |
-| **Embedding backend** | Pluggable: local sentence-transformers (default) or Voyage AI API. | `brain.py` |
+| **Embedding provider** | Pluggable: Voyage AI, OpenRouter, or an OpenAI-compatible LiteLLM gateway. | `openbrain/brain.py` |
 
 ---
 
@@ -46,9 +46,9 @@ The core abstraction is the **thought** — an append-only record of anything wo
 ```
 AI (Claude/Gemini)
   → capture_thought(content, metadata)
-      → brain.embed(content)                   # local ST or Voyage AI
-      → INSERT INTO thoughts
-      → asyncio.create_task(re-embed mentioned people/projects)
+      → brain.embed(content)                   # Voyage AI, OpenRouter, or LiteLLM
+      → upsert_thought(content, embedding, metadata, type)
+      → if inserted or metadata changed: re-embed mentioned people/projects
 ```
 
 ### Document ingest (via MCP)
@@ -100,9 +100,12 @@ get_briefing(days=N)
 
 - **Hybrid search (vector + FTS).** `search_brain` and `search_library` use vector similarity as the primary ranker but include a full-text OR condition. This catches exact names and technical terms that embeddings sometimes miss.
 
-- **Pluggable embedding backend.** `EMBED_BACKEND=local` uses sentence-transformers (free, runs on the host); `EMBED_BACKEND=voyage` uses Voyage AI. Switching requires re-embedding all vectors. The dimension is controlled by the model choice — not hardcoded.
+- **Pluggable embedding provider.** `config.yaml` selects `voyage`, `openrouter`, or `litellm`. Voyage AI with `voyage-large-2` is the current default. Switching models requires re-embedding all vectors, and changing output dimensions also requires a schema change.
 
-- **MCP as the sole interface.** No REST API, no web UI. All reads and writes go through MCP tools. The AI mediates everything. This keeps the surface area minimal and the system single-user by design.
+- **MCP as the canonical agent interface.** AI assistants read and write through
+  MCP tools. Additional interfaces such as a REST API or dashboard may be added
+  for concrete workflows, but they should reuse the same core domain logic
+  rather than becoming a parallel implementation.
 
 - **Transport flexibility.** The MCP server runs stdio for local dev/testing and streamable HTTP for remote access from Claude.ai / Gemini. Controlled by `MCP_TRANSPORT` env var.
 
@@ -110,7 +113,7 @@ get_briefing(days=N)
 
 - **Provider-agnostic model configuration.** No specific embedding model or provider is hardwired. Model backends, providers, and routing are configured via a YAML config file; API keys are kept separately in `.env`. LiteLLM is a supported routing option but not a requirement — direct provider calls are equally valid. New model backends should be added as configurable options, not hardcoded replacements.
 
-- **Nightly maintenance cron.** A scheduled job queries raw thoughts captured in the past 24 hours, consolidates duplicates, resolves conflicts, and writes clean synthesized insights back to the database. This offloads expensive reflection work from real-time conversations.
+- **Nightly maintenance cron is planned.** A future scheduled job will query raw thoughts captured in the past 24 hours, consolidate duplicates, resolve conflicts, and write clean synthesized insights back to the database. This will offload expensive reflection work from real-time conversations.
 
 ---
 
@@ -119,4 +122,5 @@ get_briefing(days=N)
 - Not a multi-tenant or SaaS system — single-user, self-hosted only.
 - Not a general-purpose RAG pipeline — purpose-built for personal memory.
 - Not a LiteLLM proxy — Open Brain is a client of the LiteLLM gateway, not its host.
-- Not a web application — no REST API, no dashboard, no browser UI.
+- Not primarily a web application. A REST API or dashboard may be added later
+  where it supports a concrete workflow.

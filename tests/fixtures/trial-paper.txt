@@ -1,0 +1,2 @@
+Synthetic control methods provide a transparent comparison for policy analysis.
+This fixture exercises Open Brain document ingest, file deduplication, and chunk creation.

@@ -6,7 +6,11 @@ Read this before doing anything else in this repository.
 
 ## What this repo is
 
-Open Brain is a personal AI memory and knowledge base. It exposes MCP tools that let any AI assistant (Claude, Gemini) read and write to a Postgres database. The AI is the interface — no web UI, no REST API. See ARCHITECTURE.md for the full picture.
+Open Brain is a personal AI memory and knowledge base. It exposes MCP tools
+that let any AI assistant (Claude, Gemini) read and write to a Postgres
+database. MCP is the canonical agent interface. Additional interfaces may be
+added later for concrete workflows if they reuse the same core domain logic.
+See ARCHITECTURE.md for the full picture.
 
 ---
 
@@ -27,7 +31,9 @@ openbrain/
 │       │              #     add_project, list_projects, update_project, refresh_embeddings,
 │       │              #     search_people, search_projects, search_by_entity, add_note
 │       └── briefing.py#     get_briefing, search_brain
-├── migrations/        # Numbered SQL files. Applied via scripts/setup_db.sh. Never edit applied files.
+├── schemas/
+│   ├── core/          # Clean install-time SQL baseline, applied in numeric order.
+│   └── optional/      # Additional capabilities evaluated after the core baseline.
 ├── scripts/           # setup_db.sh, install.sh, systemd units
 ├── config.yaml        # Non-secret config: embed provider, model, library path
 ├── .env.example       # API keys and DATABASE_URL (secrets only)
@@ -41,10 +47,23 @@ openbrain/
 ## Core invariants
 
 - **All database access goes through `brain.py`.** Tool files call `brain.*` functions; they do not import asyncpg or write SQL directly.
-- **Never edit applied migrations.** Add a new numbered file to `migrations/` instead; `scripts/setup_db.sh` applies them in order.
+- **Treat `schemas/core/` as the pre-alpha install-time baseline.** Once Open Brain contains real data, introduce a separate migration mechanism for later schema changes.
 - **`thoughts` is append-only.** Never `DELETE` or `UPDATE` thought content. Corrections go in as new thoughts.
 - **One `register(mcp)` per tool file.** Each file in `tools/` exports exactly one function that registers its tools with the FastMCP instance.
 - **No hardcoded model providers or names.** Read model config from `config.yaml`. See `docs/design/model-config.md`.
+
+---
+
+## Collaboration Style
+
+The primary user is a PhD research economist, not a software engineer. Explain
+technical choices in direct, concrete language and connect implementation
+details to their practical consequences. Prefer terminology that is natural in
+research and analysis workflows where it remains precise.
+
+- Prefer **trial run** or **dry run** instead of **smoke test**.
+- Define software-specific shorthand when it is necessary.
+- Avoid unnecessary engineering jargon when plain language is equally precise.
 
 ---
 
@@ -61,7 +80,7 @@ MCP_TRANSPORT=http .venv/bin/python -m openbrain.server
 .venv/bin/python -m openbrain.cli paper.pdf
 .venv/bin/python -m openbrain.cli papers/ --doc-type report
 
-# Apply all migrations
+# Install the core database schema
 bash scripts/setup_db.sh
 ```
 
@@ -72,7 +91,7 @@ bash scripts/setup_db.sh
 1. Implement the backing function in `brain.py`.
 2. Add the tool to the appropriate file in `tools/` (or create a new file with a `register(mcp)` function).
 3. If it's a new file, import and call `register(mcp)` in `openbrain/server.py`.
-4. If the tool needs a new table or column, add a numbered migration in `migrations/` and re-run `scripts/setup_db.sh`.
+4. If the tool needs a new table or column before first use, update the relevant file in `schemas/core/` and re-run `scripts/setup_db.sh` against a blank database. Once real data exists, add a migration mechanism instead.
 
 ---
 

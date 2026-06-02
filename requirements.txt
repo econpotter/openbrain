@@ -3,7 +3,9 @@ asyncpg
 pgvector
 pdfplumber
 voyageai
+openai
 python-dotenv
+pyyaml
 typer
 rich
 bibtexparser

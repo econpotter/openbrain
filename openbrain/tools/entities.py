@@ -1,8 +1,8 @@
 """
-tools/entities.py — people and project list/edit tools (Phase 3).
+tools/entities.py — people and project list/edit tools.
 """
 
-import brain
+from openbrain import brain
 
 
 def register(mcp):

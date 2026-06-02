@@ -1,11 +1,12 @@
 """
 tools/library.py — ingest_document, ingest_directory, search_library,
-                   update_library, update_status tools (Phase 2).
+                   update_library, update_status tools.
 """
 
 from pathlib import Path
 import tempfile
-import brain
+
+from openbrain import brain
 
 
 def register(mcp):
@@ -204,7 +205,6 @@ def register(mcp):
                 updates["doi"] = meta["doi"]
             updates["bibtex"] = bibtex
 
-        # Explicit fields override bibtex
         if title is not None:
             updates["title"] = title
         if authors is not None:
@@ -212,7 +212,7 @@ def register(mcp):
         if year is not None:
             updates["year"] = year
         if source is not None:
-            updates["source"] = source  # brain.update_library_record will abbreviate
+            updates["source"] = source
         if abstract is not None:
             updates["abstract"] = abstract
         if doc_type is not None:

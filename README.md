@@ -327,37 +327,83 @@ python ingest.py paper.pdf --force    # re-ingest a duplicate
 
 ## Troubleshooting
 
-### NordVPN meshnet: port 8443 times out
+See `../README.md` for infrastructure-level issues (NordVPN meshnet, Caddy TLS, Docker networking).
 
-**Symptom:** `curl https://<hostname>:8443/mcp/` hangs at "Trying \<ip\>:8443". `ss
--tlnp` shows the port listening. `tcpdump -i nordlynx port 8443` shows SYN
-packets arriving from the client, but no SYN-ACK is ever sent. SSH into the
-server works fine.
+### NordVPN meshnet: ports time out
 
-**Root cause:** NordVPN inserts DROP rules into the iptables FORWARD chain that
-block traffic from the meshnet range (`100.64.0.0/10`) to private subnets,
-including the Docker bridge network (`172.16.0.0/12`). Docker uses DNAT to
-rewrite the destination from the host IP to the container IP before routing, so
-the packet travels through FORWARD (not INPUT). Standard firewall whitelists
-(ufw, `nordvpn whitelist add port`) only affect INPUT and have no effect here.
-NordVPN's DROP rules in FORWARD run before Docker's own rules, so the packet is
-dropped silently.
+**Symptom:** `curl https://<hostname>:6666/` (or 8443) hangs. `tcpdump -i nordlynx port 6666` shows SYN packets arriving from the client but no SYN-ACK is sent back. SSH works fine. ufw is inactive; iptables INPUT/FORWARD rules have no effect.
 
-**Fix:** Insert an iptables exception at the top of FORWARD, scoped to port 8443
-and the Docker bridge subnet, before NordVPN's drop rules:
+**Root cause (3 layers):**
 
+1. **NordVPN uses nftables, not iptables.** Its `table inet nordvpn` registers a FORWARD chain at `priority filter` (0) with `policy drop`. iptables rules (also at priority 0) lose the race — NordVPN's chain runs first and drops forwarded meshnet traffic before Docker's accept rules can fire. Inserting iptables ACCEPT rules or nftables rules at `priority filter - 1` does not help: in nftables, `accept` from one base chain does not prevent subsequent chains at higher priority from running. Only `drop` is final across the pipeline.
+
+2. **Docker's PREROUTING DNAT does not fire for nordlynx traffic.** Docker's nat PREROUTING rule uses `ADDRTYPE match dst-type LOCAL`, which does not match the nordlynx interface address on some kernels. An explicit DNAT rule is required.
+
+3. **WireGuard MTU mismatch.** nordlynx MTU is ~1420 bytes. Docker containers use MSS 1460, producing ~1500-byte TCP segments that exceed the tunnel MTU and are silently dropped on the server→client path.
+
+**Fix — run on the server (fuji):**
+
+First, find the Caddy container IP (may change if Docker recreates the network):
 ```bash
-sudo iptables -I FORWARD 1 -s 100.64.0.0/10 -d 172.18.0.0/16 -p tcp --dport 8443 -j ACCEPT
+docker inspect caddy | grep '"IPAddress"'
+# e.g. 172.18.0.6
 ```
 
-Persist it across reboots:
+**Step 1 — explicit PREROUTING DNAT for nordlynx traffic:**
+```bash
+sudo iptables -t nat -I PREROUTING 1 -i nordlynx -p tcp --dport 6666 -j DNAT --to-destination 172.18.0.6:6666
+sudo iptables -t nat -I PREROUTING 1 -i nordlynx -p tcp --dport 8443 -j DNAT --to-destination 172.18.0.6:8443
+```
 
+**Step 2 — insert accept rules inside NordVPN's own nftables chains:**
+
+Replace `172.18.0.0/16` with your Docker bridge subnet if it differs (`docker network inspect bridge | grep Subnet`).
+```bash
+sudo nft 'insert rule inet nordvpn mesh_peer_to_internet ip saddr 100.64.0.0/10 ip daddr 172.18.0.0/16 tcp dport { 6666, 8443 } accept'
+sudo nft 'insert rule inet nordvpn internet_to_mesh_peer ip daddr 100.64.0.0/10 ip saddr 172.18.0.0/16 tcp sport { 6666, 8443 } accept'
+```
+
+**Step 3 — clamp TCP MSS for WireGuard MTU:**
+```bash
+sudo iptables -t mangle -A FORWARD -i nordlynx -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1360
+```
+
+**Step 4 — persist iptables rules (DNAT + MSS clamp survive reboots):**
 ```bash
 sudo iptables-save | sudo tee /etc/iptables/rules.v4
 ```
 
-Verify by re-running the curl from the client — it should now complete the TLS
-handshake (assuming the Caddy CA cert is trusted on the client; see step 5b).
+**Step 5 — persist NordVPN nftables rules across reconnects:**
+
+NordVPN wipes `table inet nordvpn` whenever it reconnects, so the Step 2 rules must be re-applied automatically. Use the installer from the repo root:
+```bash
+sudo bash ../scripts/install-meshnet-docker-nft.sh
+```
+
+Override defaults if needed:
+```bash
+sudo MESHNET_PEER_IP=100.64.0.0/10 MESHNET_DOCKER_PORTS=6666,8443 bash ../scripts/install-meshnet-docker-nft.sh
+```
+
+See `../scripts/README-meshnet-nft.md` for details.
+
+**Step 6 — trust Caddy's CA cert on the client (reason):**
+
+Caddy uses `tls internal` (self-signed CA). The client must trust it or TLS handshakes fail silently.
+```bash
+# On fuji:
+docker cp caddy:/data/caddy/pki/authorities/local/root.crt /tmp/caddy-fuji.crt
+# Copy caddy-fuji.crt to reason, then on reason:
+sudo cp caddy-fuji.crt /usr/local/share/ca-certificates/caddy-fuji.crt
+sudo update-ca-certificates
+```
+
+**Verify:**
+```bash
+curl -s https://potter.nicholas-fuji.nord:6666/health
+# {"status":"healthy","database":"connected"}
+curl -s https://potter.nicholas-fuji.nord:8443/mcp/
+```
 
 ## Repository structure
 

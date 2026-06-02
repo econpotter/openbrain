@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "openbrain"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp",
+    "asyncpg",
+    "pgvector",
+    "pdfplumber",
+    "voyageai",
+    "openai",
+    "python-dotenv",
+    "pyyaml",
+    "typer",
+    "rich",
+    "bibtexparser",
+]
+
+[project.scripts]
+openbrain-server = "openbrain.server:main"
+openbrain-ingest = "openbrain.cli:app"

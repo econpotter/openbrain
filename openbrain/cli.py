@@ -1,11 +1,11 @@
 """
-ingest.py — CLI for ingesting documents into the Open Brain library.
+cli.py — CLI for ingesting documents into the Open Brain library.
 
 Usage:
-    python ingest.py paper.pdf
-    python ingest.py papers/
-    python ingest.py paper.pdf --doc-type report
-    python ingest.py paper.pdf --force
+    python -m openbrain.cli paper.pdf
+    python -m openbrain.cli papers/
+    python -m openbrain.cli paper.pdf --doc-type report
+    python -m openbrain.cli paper.pdf --force
 """
 
 import asyncio
@@ -15,7 +15,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-import brain
+from openbrain import brain
 
 app = typer.Typer(help="Ingest documents into the Open Brain library.")
 console = Console()

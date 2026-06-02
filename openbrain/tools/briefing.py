@@ -1,10 +1,10 @@
 """
-tools/briefing.py — search_brain, get_daily_briefing tools (Phase 4).
+tools/briefing.py — search_brain, get_briefing tools.
 """
 
 from datetime import date, timedelta
 
-import brain
+from openbrain import brain
 
 
 def register(mcp):
@@ -33,7 +33,6 @@ def register(mcp):
 
         sections = [f"BRIEFING — {period}"]
 
-        # Projects
         if data["projects"]:
             lines = ["PROJECTS:"]
             for p in data["projects"]:
@@ -44,7 +43,6 @@ def register(mcp):
         else:
             sections.append("PROJECTS: none active")
 
-        # Thoughts
         if data["thoughts"]:
             lines = [f"THOUGHTS ({len(data['thoughts'])}):"]
             for t in data["thoughts"]:
@@ -55,14 +53,12 @@ def register(mcp):
         else:
             sections.append(f"THOUGHTS: none in the past {days} day(s)")
 
-        # People
         if data["people"]:
             lines = ["PEOPLE mentioned:"]
             for name, count in data["people"]:
                 lines.append(f"  {name} ({count} thought{'s' if count > 1 else ''})")
             sections.append("\n".join(lines))
 
-        # Library
         if data["library"]:
             lines = [f"INGESTED ({len(data['library'])} document(s)):"]
             for doc in data["library"]:
@@ -76,7 +72,6 @@ def register(mcp):
                 lines.append(line)
             sections.append("\n".join(lines))
 
-        # Follow-ups
         if data["follow_ups"]:
             lines = ["FOLLOW-UPS DUE:"]
             for p in data["follow_ups"]:
@@ -88,7 +83,6 @@ def register(mcp):
                     lines.append(f"    {p['notes']}")
             sections.append("\n".join(lines))
 
-        # Footer hint for calendar
         sections.append(
             f"NOTE: Also check gcal_list_events for {since.isoformat()} to "
             f"{today.isoformat()} to include calendar items."

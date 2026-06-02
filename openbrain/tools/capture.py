@@ -1,8 +1,8 @@
 """
-tools/capture.py — capture_thought tool (Phase 1).
+tools/capture.py — capture_thought tool.
 """
 
-import brain
+from openbrain import brain
 
 
 def register(mcp):

@@ -1,8 +1,8 @@
 """
-tools/search.py — search_thoughts, browse_recent, get_stats tools (Phase 1).
+tools/search.py — search_thoughts, browse_recent, get_stats tools.
 """
 
-import brain
+from openbrain import brain
 
 
 def register(mcp):

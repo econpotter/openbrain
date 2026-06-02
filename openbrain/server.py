@@ -1,5 +1,5 @@
 """
-mcp_server.py — FastMCP server exposing Open Brain tools to Claude/Gemini.
+server.py — FastMCP server exposing Open Brain tools.
 
 Transport is controlled by the MCP_TRANSPORT environment variable:
   stdio  — for local development and testing (default)
@@ -8,11 +8,7 @@ Transport is controlled by the MCP_TRANSPORT environment variable:
 
 import os
 from fastmcp import FastMCP
-import tools.capture as capture
-import tools.search as search
-import tools.library as library
-import tools.entities as entities
-import tools.briefing as briefing
+from openbrain.tools import capture, search, library, entities, briefing
 
 mcp = FastMCP(
     "Open Brain",
@@ -28,20 +24,21 @@ Open Brain is a personal AI memory and knowledge base. Use these patterns when i
 """.strip(),
 )
 
-# Phase 1 — core capture & recall
 capture.register(mcp)
 search.register(mcp)
-
-# Phase 2–4 — stubs, uncomment as each phase is implemented
 library.register(mcp)
 entities.register(mcp)
 briefing.register(mcp)
 
-if __name__ == "__main__":
+
+def main():
     transport = os.getenv("MCP_TRANSPORT", "stdio")
     port = int(os.getenv("PORT", "8000"))
-
     if transport == "http":
         mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
     else:
         mcp.run()
+
+
+if __name__ == "__main__":
+    main()

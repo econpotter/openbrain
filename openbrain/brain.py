@@ -1,12 +1,9 @@
 """
 brain.py — core logic: embed, store, retrieve.
 
-All MCP tools call into this module. Database pool and embedding model
-are initialized lazily on first use.
-
-Embedding backend is controlled by EMBED_BACKEND in .env:
-  local   — sentence-transformers running on this machine (default, free)
-  voyage  — Voyage AI API (requires VOYAGE_API_KEY)
+All MCP tools call into this module. Database pool is initialized lazily on
+first use. Configuration is loaded from config.yaml (non-secrets) and .env
+(API keys and DATABASE_URL).
 """
 
 import asyncio
@@ -18,19 +15,37 @@ import shutil
 import urllib.request
 import urllib.error
 from pathlib import Path
+
 import asyncpg
 import bibtexparser
 import pgvector.asyncpg
+import yaml
 from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.environ["DATABASE_URL"]
-EMBED_BACKEND = os.getenv("EMBED_BACKEND", "local")
-EMBED_MODEL_LOCAL = os.getenv("EMBED_MODEL_LOCAL", "BAAI/bge-large-en-v1.5")
-VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
-VOYAGE_MODEL = os.getenv("VOYAGE_MODEL", "voyage-large-2")
-LIBRARY_PATH = Path(os.getenv("LIBRARY_PATH", "~/library")).expanduser()
+_CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
+
+
+def _load_config() -> dict:
+    if not _CONFIG_PATH.exists():
+        raise FileNotFoundError(
+            f"config.yaml not found at {_CONFIG_PATH}. "
+            "Copy config.yaml.example and fill it in."
+        )
+    with open(_CONFIG_PATH) as f:
+        cfg = yaml.safe_load(f)
+    if not cfg:
+        raise ValueError("config.yaml is empty or invalid.")
+    return cfg
+
+
+_cfg = _load_config()
+
+DATABASE_URL: str = os.environ["DATABASE_URL"]
+LIBRARY_PATH: Path = Path(_cfg["library_path"]).expanduser()
+EMBED_PROVIDER: str = _cfg["embed"]["provider"]
+EMBED_MODEL: str = _cfg["embed"]["model"]
 
 _STOPWORDS = frozenset({
     "a", "an", "the", "and", "or", "but", "nor", "for", "yet", "so",
@@ -48,13 +63,11 @@ _pool: asyncpg.Pool | None = None
 
 
 def _parse_bibtex(bibtex_str: str) -> dict:
-    """Parse a BibTeX string and return a metadata dict."""
     bib = bibtexparser.loads(bibtex_str)
     if not bib.entries:
         return {}
     entry = bib.entries[0]
 
-    # Authors: "Last, First and Last, First" → ["First Last", ...]
     raw_authors = entry.get("author", "")
     authors = []
     if raw_authors:
@@ -84,7 +97,6 @@ def _parse_bibtex(bibtex_str: str) -> dict:
         "doi": entry.get("doi"),
         "bibtex": bibtex_str,
     }
-_st_model = None
 
 
 async def get_pool() -> asyncpg.Pool:
@@ -97,29 +109,44 @@ async def get_pool() -> asyncpg.Pool:
     return _pool
 
 
-def _load_st_model():
-    global _st_model
-    if _st_model is None:
-        from sentence_transformers import SentenceTransformer
-        _st_model = SentenceTransformer(EMBED_MODEL_LOCAL)
-    return _st_model
-
-
 async def embed(text: str) -> list[float]:
-    if EMBED_BACKEND == "voyage":
+    if EMBED_PROVIDER == "voyage":
         import voyageai
-        client = voyageai.AsyncClient(api_key=VOYAGE_API_KEY)
-        result = await client.embed([text], model=VOYAGE_MODEL)
+        client = voyageai.AsyncClient(api_key=os.environ["VOYAGE_API_KEY"])
+        result = await client.embed([text], model=EMBED_MODEL)
         return result.embeddings[0]
+
+    elif EMBED_PROVIDER == "openrouter":
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(
+            api_key=os.environ["OPENROUTER_API_KEY"],
+            base_url="https://openrouter.ai/api/v1",
+        )
+        result = await client.embeddings.create(input=[text], model=EMBED_MODEL)
+        return result.data[0].embedding
+
+    elif EMBED_PROVIDER == "litellm":
+        from openai import AsyncOpenAI
+        litellm_url = _cfg["embed"].get("litellm_url")
+        if not litellm_url:
+            raise ValueError(
+                "config.yaml: embed.litellm_url is required when embed.provider is litellm"
+            )
+        client = AsyncOpenAI(
+            api_key=os.environ["LITELLM_API_KEY"],
+            base_url=litellm_url,
+        )
+        result = await client.embeddings.create(input=[text], model=EMBED_MODEL)
+        return result.data[0].embedding
+
     else:
-        loop = asyncio.get_event_loop()
-        model = await loop.run_in_executor(None, _load_st_model)
-        embedding = await loop.run_in_executor(None, lambda: model.encode(text).tolist())
-        return embedding
+        raise ValueError(
+            f"Unknown embed.provider: {EMBED_PROVIDER!r}. "
+            "Expected one of: voyage, openrouter, litellm"
+        )
 
 
 async def _enriched_entity_text(table: str, entity_id: str) -> str:
-    """Build a rich embedding text for a person or project by including related thoughts."""
     pool = await get_pool()
     if table == "people":
         async with pool.acquire() as conn:
@@ -145,7 +172,6 @@ async def _enriched_entity_text(table: str, entity_id: str) -> str:
 
 
 async def _refresh_entity_embedding(table: str, entity_id: str) -> None:
-    """Re-embed a single person or project with enriched context."""
     text = await _enriched_entity_text(table, entity_id)
     emb = await embed(text)
     pool = await get_pool()
@@ -156,7 +182,6 @@ async def _refresh_entity_embedding(table: str, entity_id: str) -> None:
 
 
 async def _refresh_mentioned_entities(people: list[str], projects: list[str]) -> None:
-    """Background task: re-embed people and projects mentioned in a new thought."""
     pool = await get_pool()
     for name in people:
         async with pool.acquire() as conn:
@@ -181,7 +206,6 @@ async def _refresh_mentioned_entities(people: list[str], projects: list[str]) ->
 
 
 async def refresh_all_embeddings(entity_type: str = "all") -> dict:
-    """Re-embed all people and/or projects with enriched context. Returns counts."""
     pool = await get_pool()
     counts: dict = {}
     if entity_type in ("all", "people"):
@@ -200,7 +224,6 @@ async def refresh_all_embeddings(entity_type: str = "all") -> dict:
 
 
 async def store_thought(content: str, metadata: dict | None = None) -> str:
-    """Embed and persist a thought. Returns the new UUID as a string."""
     pool = await get_pool()
     embedding = await embed(content)
     meta = metadata or {}
@@ -219,7 +242,6 @@ async def store_thought(content: str, metadata: dict | None = None) -> str:
         )
     thought_id = str(row["id"])
 
-    # Re-embed mentioned entities in the background
     people = meta.get("people") or []
     projects = meta.get("projects") or []
     if people or projects:
@@ -233,7 +255,6 @@ async def search_thoughts_vec(
     threshold: float = 0.5,
     count: int = 10,
 ) -> list[dict]:
-    """Semantic search over thoughts. Returns rows with similarity score."""
     pool = await get_pool()
     embedding = await embed(query)
     async with pool.acquire() as conn:
@@ -247,7 +268,6 @@ async def search_thoughts_vec(
 
 
 async def recent_thoughts(since_hours: int = 24, limit: int = 50) -> list[dict]:
-    """Return thoughts created in the last N hours, newest first."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -265,7 +285,6 @@ async def recent_thoughts(since_hours: int = 24, limit: int = 50) -> list[dict]:
 
 
 async def _entity_text(table: str, row: dict) -> str:
-    """Concatenate the meaningful text fields of a people or projects row for embedding."""
     if table == "people":
         parts = [row.get("name") or "", row.get("affiliation") or "",
                  row.get("relationship") or "", row.get("notes") or ""]
@@ -274,8 +293,12 @@ async def _entity_text(table: str, row: dict) -> str:
     return " ".join(p for p in parts if p)
 
 
-async def add_person(name: str, affiliation: str | None = None, relationship: str | None = None, notes: str | None = None) -> dict:
-    """Insert a new person and embed them. Returns the new row."""
+async def add_person(
+    name: str,
+    affiliation: str | None = None,
+    relationship: str | None = None,
+    notes: str | None = None,
+) -> dict:
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -287,12 +310,18 @@ async def add_person(name: str, affiliation: str | None = None, relationship: st
     text = await _entity_text("people", inserted)
     emb = await embed(text)
     async with pool.acquire() as conn:
-        await conn.execute("UPDATE people SET embedding = $1 WHERE id = $2", emb, str(inserted["id"]))
+        await conn.execute(
+            "UPDATE people SET embedding = $1 WHERE id = $2", emb, str(inserted["id"])
+        )
     return inserted
 
 
-async def add_project(name: str, description: str | None = None, status: str = "active", start_date: str | None = None) -> dict:
-    """Insert a new project and embed it. Returns the new row."""
+async def add_project(
+    name: str,
+    description: str | None = None,
+    status: str = "active",
+    start_date: str | None = None,
+) -> dict:
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -304,12 +333,13 @@ async def add_project(name: str, description: str | None = None, status: str = "
     text = await _entity_text("projects", inserted)
     emb = await embed(text)
     async with pool.acquire() as conn:
-        await conn.execute("UPDATE projects SET embedding = $1 WHERE id = $2", emb, str(inserted["id"]))
+        await conn.execute(
+            "UPDATE projects SET embedding = $1 WHERE id = $2", emb, str(inserted["id"])
+        )
     return inserted
 
 
 async def list_people(search: str | None = None) -> list[dict]:
-    """Return all people, optionally filtered by name."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         if search:
@@ -326,7 +356,6 @@ async def list_people(search: str | None = None) -> list[dict]:
 
 
 async def update_person(person_id: str, updates: dict) -> dict | None:
-    """Update fields on a person row. Refreshes embedding. Returns updated row or None."""
     allowed = {"name", "affiliation", "relationship", "notes", "follow_up_date"}
     fields = {k: v for k, v in updates.items() if k in allowed}
     if not fields:
@@ -352,8 +381,9 @@ async def update_person(person_id: str, updates: dict) -> dict | None:
     return None
 
 
-async def search_people_vec(query: str, threshold: float = 0.3, count: int = 10) -> list[dict]:
-    """Semantic search over people."""
+async def search_people_vec(
+    query: str, threshold: float = 0.3, count: int = 10
+) -> list[dict]:
     pool = await get_pool()
     embedding = await embed(query)
     async with pool.acquire() as conn:
@@ -364,7 +394,6 @@ async def search_people_vec(query: str, threshold: float = 0.3, count: int = 10)
 
 
 async def find_person_by_name(name: str) -> list[dict]:
-    """Find people whose name matches (case-insensitive)."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -376,7 +405,6 @@ async def find_person_by_name(name: str) -> list[dict]:
 
 
 async def list_projects(status: str | None = None) -> list[dict]:
-    """Return all projects, optionally filtered by status."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         if status:
@@ -393,7 +421,6 @@ async def list_projects(status: str | None = None) -> list[dict]:
 
 
 async def update_project(project_id: str, updates: dict) -> dict | None:
-    """Update fields on a project row. Refreshes embedding. Returns updated row or None."""
     allowed = {"name", "description", "status", "start_date"}
     fields = {k: v for k, v in updates.items() if k in allowed}
     if not fields:
@@ -419,8 +446,9 @@ async def update_project(project_id: str, updates: dict) -> dict | None:
     return None
 
 
-async def search_projects_vec(query: str, threshold: float = 0.3, count: int = 10) -> list[dict]:
-    """Semantic search over projects."""
+async def search_projects_vec(
+    query: str, threshold: float = 0.3, count: int = 10
+) -> list[dict]:
     pool = await get_pool()
     embedding = await embed(query)
     async with pool.acquire() as conn:
@@ -431,7 +459,6 @@ async def search_projects_vec(query: str, threshold: float = 0.3, count: int = 1
 
 
 async def find_project_by_name(name: str) -> list[dict]:
-    """Find projects whose name matches (case-insensitive)."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -469,8 +496,9 @@ def _author_slug(authors: list[str]) -> str:
     return last(authors[0]).capitalize() + "ETAL"
 
 
-def _make_filename(title: str, authors: list[str], year: int | None,
-                   source: str | None, ext: str) -> str:
+def _make_filename(
+    title: str, authors: list[str], year: int | None, source: str | None, ext: str
+) -> str:
     parts = [f"{_author_slug(authors)}{year or ''}"]
     if source:
         slug = _source_slug(source)
@@ -494,7 +522,6 @@ def _sha256(path: Path) -> str:
 
 
 def _extract_pdf(filepath: str) -> tuple[str, str]:
-    """Return (first_page_text, full_text). Sync — run in executor."""
     import pdfplumber
     pages = []
     with pdfplumber.open(filepath) as pdf:
@@ -513,7 +540,7 @@ def _chunk_text(text: str, chunk_size: int = 400, overlap: int = 50) -> list[str
     words = text.split()
     chunks, i = [], 0
     while i < len(words):
-        chunks.append(" ".join(words[i : i + chunk_size]))
+        chunks.append(" ".join(words[i: i + chunk_size]))
         i += chunk_size - overlap
     return [c for c in chunks if c.strip()]
 
@@ -523,11 +550,9 @@ def _chunk_text(text: str, chunk_size: int = 400, overlap: int = 50) -> list[str
 # ---------------------------------------------------------------------------
 
 def _crossref_lookup(doi: str) -> dict:
-    """Fetch metadata + BibTeX from CrossRef/doi.org. Sync — run in executor."""
     result: dict = {}
     headers = {"User-Agent": "OpenBrain/1.0 (mailto:open-brain@localhost)"}
 
-    # JSON metadata
     try:
         req = urllib.request.Request(
             f"https://api.crossref.org/works/{doi}", headers=headers
@@ -557,7 +582,6 @@ def _crossref_lookup(doi: str) -> dict:
     except Exception:
         pass
 
-    # BibTeX
     try:
         req = urllib.request.Request(
             f"https://doi.org/{doi}",
@@ -582,7 +606,6 @@ async def ingest_document_pipeline(
     bibtex_str: str | None = None,
     title: str | None = None,
 ) -> dict:
-    """Full ingest pipeline: extract → CrossRef → copy → store → chunk+embed."""
     path = Path(filepath).expanduser().resolve()
     if not path.exists():
         raise FileNotFoundError(f"File not found: {filepath}")
@@ -590,7 +613,6 @@ async def ingest_document_pipeline(
     file_hash = _sha256(path)
     pool = await get_pool()
 
-    # Deduplication check
     async with pool.acquire() as conn:
         existing = await conn.fetchrow(
             "SELECT id, filepath FROM library WHERE file_hash = $1", file_hash
@@ -603,7 +625,6 @@ async def ingest_document_pipeline(
         async with pool.acquire() as conn:
             await conn.execute("DELETE FROM library WHERE id = $1", existing["id"])
 
-    # Extract text
     loop = asyncio.get_event_loop()
     ext = path.suffix.lower()
     if ext == ".pdf":
@@ -612,7 +633,6 @@ async def ingest_document_pipeline(
         full_text = path.read_text(errors="replace")
         first_page = full_text[:3000]
 
-    # Metadata via DOI → CrossRef
     resolved_title = authors = year = source = abstract = doi = bibtex = None
     authors = []
     doi = _extract_doi(first_page)
@@ -625,7 +645,6 @@ async def ingest_document_pipeline(
         abstract = meta.get("abstract")
         bibtex = meta.get("bibtex")
 
-    # Fallback: user-supplied BibTeX
     if not resolved_title and bibtex_str:
         meta = _parse_bibtex(bibtex_str)
         resolved_title = meta.get("title")
@@ -636,28 +655,23 @@ async def ingest_document_pipeline(
         doi = meta.get("doi") or doi
         bibtex = bibtex_str
 
-    # Fallback: user-supplied title
     if not resolved_title and title:
         resolved_title = title
 
-    # Last resort: use filename stem; caller will be told to run update_library
     metadata_missing = not resolved_title
     if metadata_missing:
         resolved_title = path.stem
 
     title = resolved_title
 
-    # Copy to library directory
     LIBRARY_PATH.mkdir(parents=True, exist_ok=True)
     filename = _make_filename(title, authors, year, source, ext)
     dest = LIBRARY_PATH / filename
-    # Avoid overwriting a different file with the same slug
     if dest.exists() and not force:
         stem, suffix = dest.stem, dest.suffix
         dest = LIBRARY_PATH / f"{stem}-2{suffix}"
     shutil.copy2(str(path), str(dest))
 
-    # Write library record
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -671,7 +685,6 @@ async def ingest_document_pipeline(
         )
     library_id = row["id"]
 
-    # Chunk, embed, and store
     chunks = _chunk_text(full_text)
     for i, chunk_content in enumerate(chunks):
         emb = await embed(chunk_content)
@@ -682,7 +695,6 @@ async def ingest_document_pipeline(
                 library_id, chunk_content, emb, i,
             )
 
-    # Write ingest event to thoughts
     author_str = " & ".join(authors) if authors else "Unknown"
     thought = f"Ingested: {author_str} {year or ''} — {title}".strip()
     await store_thought(thought, {
@@ -708,7 +720,6 @@ async def search_library_vec(
     year_min: int | None = None,
     doc_type: str | None = None,
 ) -> list[dict]:
-    """Semantic search over library chunks, returning paper-level results."""
     pool = await get_pool()
     embedding = await embed(query)
 
@@ -747,7 +758,6 @@ async def search_library_vec(
 
 
 async def find_library_records(query: str) -> list[dict]:
-    """Flexible lookup across title, filepath, authors, and DOI."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -766,11 +776,9 @@ async def find_library_records(query: str) -> list[dict]:
 
 
 async def update_library_record(record_id: str, updates: dict) -> dict | None:
-    """Update fields on a library row. Auto-abbreviates source if provided."""
     allowed = {"title", "authors", "year", "source", "doc_type", "abstract",
                "status", "doi", "bibtex", "filepath"}
     fields = {k: v for k, v in updates.items() if k in allowed}
-    # Auto-abbreviate source
     if "source" in fields and fields["source"]:
         fields["source"] = _source_slug(fields["source"]) or fields["source"]
     if not fields:
@@ -799,8 +807,6 @@ async def search_brain(
     OR inclusion condition, catching exact names and terms that embeddings miss.
     Library results are deduplicated to the best matching chunk per document.
     People and projects are surfaced via the metadata bridge on matching thoughts.
-
-    Returns a structured dict with keys: thoughts, library, people, projects.
     """
     pool = await get_pool()
     embedding = await embed(query)
@@ -869,7 +875,6 @@ async def search_brain(
 
 
 async def add_person_note(name: str, note: str) -> dict:
-    """Capture a timestamped note about a person as a thought. Returns the person row."""
     matches = await find_person_by_name(name)
     if not matches:
         raise ValueError(f"No person found matching '{name}'.")
@@ -885,7 +890,6 @@ async def add_person_note(name: str, note: str) -> dict:
 
 
 async def get_person_profile(name: str) -> dict | None:
-    """Return a full profile: person record + thoughts mentioning them + co-occurrences."""
     matches = await find_person_by_name(name)
     if not matches:
         return None
@@ -913,7 +917,6 @@ async def get_person_profile(name: str) -> dict | None:
 
 
 async def people_with_follow_ups(within_days: int = 7) -> list[dict]:
-    """Return people whose follow_up_date is today or within the next N days."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -934,7 +937,6 @@ async def thoughts_mentioning(
     entity_type: str = "any",
     limit: int = 20,
 ) -> list[dict]:
-    """Find thoughts whose metadata people/projects arrays contain name."""
     pool = await get_pool()
     if entity_type == "person":
         keys = ["people"]
@@ -963,7 +965,6 @@ async def thoughts_mentioning(
 
 
 def _extract_cooccurrences(thoughts: list[dict], exclude: str) -> dict:
-    """Count people and projects co-mentioned across a list of thoughts."""
     people: dict[str, int] = {}
     projects: dict[str, int] = {}
     for t in thoughts:
@@ -983,7 +984,6 @@ def _extract_cooccurrences(thoughts: list[dict], exclude: str) -> dict:
 
 
 async def get_briefing(days: int = 1) -> dict:
-    """Return a structured briefing covering the given number of past days."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         projects = await conn.fetch(
@@ -1024,7 +1024,6 @@ async def get_briefing(days: int = 1) -> dict:
 
 
 async def table_stats() -> dict:
-    """Return row counts and recent activity metrics."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         thoughts_total = await conn.fetchval("SELECT count(*) FROM thoughts")

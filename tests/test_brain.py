@@ -28,8 +28,8 @@ sys.modules.setdefault("bibtexparser", bibtexparser)
 
 os.environ.setdefault("DATABASE_URL", "postgresql://test/openbrain")
 
-from openbrain import brain
-from openbrain.tools import search as search_tools
+from openbrain import brain  # noqa: E402
+from openbrain.tools import search as search_tools  # noqa: E402
 
 
 class _Acquire:
@@ -89,6 +89,14 @@ class _FetchConnection:
     async def fetch(self, query, *args):
         self.calls.append((query, args))
         return self.rows
+
+
+class _ExecuteConnection:
+    def __init__(self):
+        self.calls = []
+
+    async def execute(self, query, *args):
+        self.calls.append((query, args))
 
 
 class _BriefingConnection:
@@ -311,6 +319,63 @@ class TableStatsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Library documents: 1", result)
         self.assertIn("Tags: policy: 2, causal: 1", result)
         self.assertIn("Sources: claude: 3", result)
+
+
+class MaintenanceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_maintenance_thoughts_excludes_synthesis_and_archived_metadata(self):
+        connection = _FetchConnection([{"id": "thought-1"}])
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))):
+            rows = await brain.maintenance_thoughts(since_hours=12, limit=7)
+
+        self.assertEqual(rows, [{"id": "thought-1"}])
+        query, args = connection.calls[0]
+        self.assertIn("type NOT IN ('synthesis', 'archived')", query)
+        self.assertIn("metadata->>'archived'", query)
+        self.assertEqual(args, (12, 7))
+
+    async def test_run_maintenance_writes_synthesis_then_archives_inputs(self):
+        thoughts = [
+            {
+                "id": "thought-1",
+                "content": "Ada prefers the short estimator note.",
+                "metadata": {"people": ["Ada"]},
+                "created_at": "recent",
+            }
+        ]
+        store_thought = AsyncMock(return_value="synthesis-1")
+        archive_thoughts = AsyncMock()
+        with (
+            patch.object(brain, "maintenance_thoughts", AsyncMock(return_value=thoughts)),
+            patch.object(
+                brain,
+                "complete_maintenance_prompt",
+                AsyncMock(return_value="Remember Ada's estimator preference."),
+            ),
+            patch.object(brain, "store_thought", store_thought),
+            patch.object(brain, "archive_thoughts", archive_thoughts),
+        ):
+            result = await brain.run_maintenance_once()
+
+        self.assertEqual(result, {"processed": 1, "syntheses": 1})
+        store_thought.assert_awaited_once()
+        content, metadata = store_thought.await_args.args
+        self.assertEqual(content, "Remember Ada's estimator preference.")
+        self.assertEqual(metadata["type"], "synthesis")
+        self.assertEqual(metadata["source_type"], "maintenance")
+        self.assertEqual(metadata["thought_ids"], ["thought-1"])
+        archive_thoughts.assert_awaited_once_with(
+            ["thought-1"], metadata["maintenance_run_id"]
+        )
+
+    async def test_archive_thoughts_sets_archived_metadata(self):
+        connection = _ExecuteConnection()
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))):
+            await brain.archive_thoughts(["thought-1"], "run-1")
+
+        query, args = connection.calls[0]
+        self.assertIn("'archived', true", query)
+        self.assertIn("'maintenance_run_id', $2", query)
+        self.assertEqual(args, (["thought-1"], "run-1"))
 
 
 class BriefingTests(unittest.IsolatedAsyncioTestCase):

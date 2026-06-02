@@ -53,6 +53,10 @@ The initial schema uses 1536-dimensional vectors to match `voyage-large-2`.
 Changing to a model with a different output dimension requires a schema change
 and re-embedding existing records.
 
+Nightly maintenance uses a separate chat model configured in `config.yaml`.
+That model consolidates recent raw thoughts into durable synthesis memories and
+does not need to match the embedding model.
+
 ### Install PostgreSQL and pgvector
 
 ```bash
@@ -114,7 +118,8 @@ sudo systemctl status openbrain-mcp
 ### 4b. Set up HTTPS with Caddy (Docker deployment on VPN-only hosts)
 
 The repository-level `docker-compose.yaml` runs the MCP server, Postgres, and
-Caddy together. Caddy terminates TLS on port 8443 and proxies to the MCP server
+Caddy together, plus a maintenance container that performs nightly thought
+consolidation. Caddy terminates TLS on port 8443 and proxies to the MCP server
 on the Docker network. This is an alternative to running the MCP server through
 the systemd service installed above.
 
@@ -183,20 +188,25 @@ If you set `MCP_ACCESS_KEY`, configure the connector to send it as a Bearer toke
 
 #### Claude Code (CLI)
 
-Use 
+If you set `MCP_ACCESS_KEY`, pass the same value as a Bearer token:
 
 ```bash
-claude mcp add --transport http openbrain https://<your-hostname>:8443/mcp
-``` 
+claude mcp add --transport http \
+  --header "Authorization: Bearer <your-mcp-access-key>" \
+  openbrain https://<your-hostname>:8443/mcp
+```
 
-to add directly, or add the server to `~/.claude/settings.json` on your client machine:
+To add the server through JSON configuration instead:
 
 ```json
 {
   "mcpServers": {
     "openbrain": {
       "type": "http",
-      "url": "https://<your-hostname>:8443/mcp"
+      "url": "https://<your-hostname>:8443/mcp",
+      "headers": {
+        "Authorization": "Bearer <your-mcp-access-key>"
+      }
     }
   }
 }
@@ -265,6 +275,29 @@ To route embeddings through OpenRouter or LiteLLM, update `embed.provider`,
 If you switch models after storing data, existing vectors and new vectors
 will be from different models and semantic search results will be unreliable.
 If the output dimension also changes, update the schema before re-embedding.
+
+## Nightly maintenance
+
+The Compose stack includes an `openbrain-maintenance` container. It runs
+`scripts/openbrain-maintenance.py --loop`, sleeps until `maintenance.run_at`,
+then consolidates recent unarchived thoughts with the configured maintenance
+model.
+
+```yaml
+maintenance:
+  provider: litellm
+  model: <local-or-remote-chat-model>
+  litellm_url: http://litellm:4000
+  run_at: "02:00"
+  lookback_hours: 24
+  batch_size: 50
+```
+
+Run one maintenance pass manually from the stack with:
+
+```bash
+docker compose run --rm maintenance python scripts/openbrain-maintenance.py
+```
 
 ## Backup and restore
 

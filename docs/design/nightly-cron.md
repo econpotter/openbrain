@@ -11,7 +11,7 @@ Offload expensive memory consolidation from real-time conversations. Raw thought
 Runs at ~2 AM on Computer A:
 
 1. Queries all thoughts created in the past 24 hours with `type` not in `('synthesis', 'archived')`.
-2. Batches them and sends to a local model via Ollama (routed through LiteLLM) with a consolidation prompt:
+2. Batches them and sends to the configured maintenance model with a consolidation prompt:
    - Deduplicate redundant entries
    - Resolve conflicting facts
    - Extract permanent rules or constraints
@@ -23,13 +23,18 @@ Runs at ~2 AM on Computer A:
 
 ## Compute routing
 
-The consolidation model runs locally on a desktop (Ollama) routed through LiteLLM. This keeps token costs at zero and lets the job run as slowly as it needs to without blocking anything. The LiteLLM model name is configured in `config.yaml` under a `maintenance` section.
+The consolidation model is configured in `config.yaml` under a `maintenance`
+section. A local model routed through LiteLLM is the intended low-cost default,
+but the code reads the provider, model name, URL, schedule, lookback window, and
+batch size from config rather than assuming a specific model.
 
 ---
 
-## Systemd timer
+## Docker Compose scheduling
 
-The job runs as a systemd timer on Computer A. See `scripts/openbrain-backup.timer` for the timer unit pattern. A `openbrain-maintenance.timer` / `openbrain-maintenance.service` pair should follow the same structure.
+The job runs from the repository-level Docker Compose stack as the
+`maintenance` service. The container runs `scripts/openbrain-maintenance.py
+--loop`, sleeps until `maintenance.run_at`, and runs once per day.
 
 ---
 
@@ -43,4 +48,6 @@ The job runs as a systemd timer on Computer A. See `scripts/openbrain-backup.tim
 
 ## Status
 
-Not yet implemented. The thought schema supports `type: synthesis` and `metadata.archived`. The cron script and systemd units are to be built.
+Implemented. The thought schema supports `type: synthesis` and
+`metadata.archived`; the maintenance script and Compose service run the daily
+job.

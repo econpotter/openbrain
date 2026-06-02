@@ -36,6 +36,7 @@ The core abstraction is the **thought** — an append-only record of anything wo
 | **schemas/core/** | Clean SQL baseline for initializing a new Open Brain database. | `schemas/core/` |
 | **Postgres + pgvector** | Storage: structured rows + vector indexes for semantic search. | (external) |
 | **Embedding provider** | Pluggable: Voyage AI, OpenRouter, or an OpenAI-compatible LiteLLM gateway. | `openbrain/brain.py` |
+| **Maintenance job** | Docker Compose service that consolidates recent raw thoughts with the configured maintenance model. | `scripts/openbrain-maintenance.py` |
 
 ---
 
@@ -113,7 +114,10 @@ get_briefing(days=N)
 
 - **Provider-agnostic model configuration.** No specific embedding model or provider is hardwired. Model backends, providers, and routing are configured via a YAML config file; API keys are kept separately in `.env`. LiteLLM is a supported routing option but not a requirement — direct provider calls are equally valid. New model backends should be added as configurable options, not hardcoded replacements.
 
-- **Nightly maintenance cron is planned.** A future scheduled job will query raw thoughts captured in the past 24 hours, consolidate duplicates, resolve conflicts, and write clean synthesized insights back to the database. This will offload expensive reflection work from real-time conversations.
+- **Nightly maintenance runs in Compose.** A scheduled container queries recent
+  unarchived raw thoughts, consolidates duplicates, resolves conflicts, writes
+  clean synthesized insights back to the database, and marks processed inputs
+  with `metadata.archived = true`.
 
 ---
 

@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "openbrain"
@@ -23,3 +23,11 @@ dependencies = [
 [project.scripts]
 openbrain-server = "openbrain.server:main"
 openbrain-ingest = "openbrain.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["openbrain*"]
+
+[dependency-groups]
+dev = [
+    "ruff",
+]

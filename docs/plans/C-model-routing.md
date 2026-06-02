@@ -9,9 +9,9 @@ Route all model calls through a configurable backend (LiteLLM or direct provider
 ## Status
 
 - [x] Open Brain MCP server running on Computer A
-- [ ] LiteLLM embedding backend configured in `config.yaml`
-- [ ] Nightly maintenance cron script written
-- [ ] Systemd timer units deployed
+- [x] LiteLLM embedding backend supported through `config.yaml`
+- [x] Nightly maintenance script written
+- [x] Nightly maintenance runs from the Docker Compose stack
 
 ---
 
@@ -24,8 +24,8 @@ consistent source:
 ```yaml
 embed:
   provider: litellm          # or: voyage, openrouter
-  model: text-embedding-3-small
-  litellm_url: http://computer-a:4000
+  model: <1536-dimensional-embedding-model>
+  litellm_url: http://litellm:4000
 ```
 
 If switching from a previous backend with a different dimension, follow the migration steps in `docs/design/model-config.md` (re-embed all vectors, add dimension migration).
@@ -57,11 +57,9 @@ See `docs/design/nightly-cron.md` for full design. Implementation steps:
    - Write synthesized outputs as `type: synthesis` thoughts
    - Set `metadata.archived = true` on processed raw thoughts
 
-2. Write systemd units `scripts/openbrain-maintenance.service` and `scripts/openbrain-maintenance.timer` (follow the pattern in `scripts/openbrain-backup.timer`)
-
-3. Enable the timer on Computer A:
+2. Run the maintenance script from the Docker Compose stack:
    ```bash
-   sudo systemctl enable --now openbrain-maintenance.timer
+   docker compose up -d maintenance
    ```
 
 ---
@@ -71,3 +69,5 @@ See `docs/design/nightly-cron.md` for full design. Implementation steps:
 - The nightly job never deletes thoughts — `thoughts` is append-only. Archiving sets `metadata.archived: true` only.
 - LiteLLM is one provider option. Direct Voyage AI and OpenRouter calls are
   equally valid. Local sentence-transformers embeddings are not implemented.
+- The maintenance synthesis model is also configured in `config.yaml`; the code
+  does not assume a specific local model name.

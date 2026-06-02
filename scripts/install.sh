@@ -74,4 +74,4 @@ echo "      bash scripts/setup-caddy.sh <your-hostname>"
 echo
 echo "Then connect Claude.ai:   Settings → Connectors → Add MCP server"
 echo "URL:                      https://<your-hostname>:8443/mcp"
-echo "Connect Claude Code:      claude mcp add --transport http openbrain https://<your-hostname>:8443/mcp"
+echo "Connect Claude Code:      claude mcp add --transport http --header \"Authorization: Bearer <your-mcp-access-key>\" openbrain https://<your-hostname>:8443/mcp"

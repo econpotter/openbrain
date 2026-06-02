@@ -1,11 +1,19 @@
 # Non-secret configuration for Open Brain.
 # API keys and DATABASE_URL go in .env — not here.
 
-library_path: ~/library
+library_path: /mnt/data/openbrain/library
 
 embed:
   # Provider: voyage | openrouter | litellm
   provider: voyage
   model: voyage-large-2
-  # litellm_url is required when provider is litellm
-  # litellm_url: http://localhost:4000
+  litellm_url: http://litellm:4000
+
+maintenance:
+  # Provider: openrouter | litellm
+  provider: litellm
+  model: moon8-fast
+  litellm_url: http://litellm:4000
+  run_at: "02:00"
+  lookback_hours: 24
+  batch_size: 50

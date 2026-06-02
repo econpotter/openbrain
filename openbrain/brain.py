@@ -46,6 +46,7 @@ DATABASE_URL: str = os.environ["DATABASE_URL"]
 LIBRARY_PATH: Path = Path(os.getenv("LIBRARY_PATH", _cfg["library_path"])).expanduser()
 EMBED_PROVIDER: str = _cfg["embed"]["provider"]
 EMBED_MODEL: str = _cfg["embed"]["model"]
+MAINTENANCE_CONFIG: dict = _cfg.get("maintenance", {})
 
 _STOPWORDS = frozenset({
     "a", "an", "the", "and", "or", "but", "nor", "for", "yet", "so",
@@ -296,6 +297,144 @@ async def recent_thoughts(since_hours: int = 24, limit: int = 50) -> list[dict]:
             limit,
         )
     return [dict(r) for r in rows]
+
+
+async def maintenance_thoughts(
+    since_hours: int = 24,
+    limit: int = 50,
+) -> list[dict]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, content, metadata, created_at
+            FROM thoughts
+            WHERE created_at >= now() - make_interval(hours := $1)
+              AND type NOT IN ('synthesis', 'archived')
+              AND COALESCE(metadata->>'archived', 'false') <> 'true'
+            ORDER BY created_at ASC
+            LIMIT $2
+            """,
+            since_hours,
+            limit,
+        )
+    return [dict(r) for r in rows]
+
+
+def _maintenance_prompt(thoughts: list[dict]) -> str:
+    lines = [
+        "Consolidate these Open Brain memory records.",
+        "",
+        "Tasks:",
+        "- Deduplicate redundant entries.",
+        "- Resolve conflicts cautiously; say when evidence is uncertain.",
+        "- Extract durable facts, project milestones, decisions, and constraints.",
+        "- Omit transient chatter and implementation noise.",
+        "",
+        "Return concise prose or bullets suitable for long-term memory.",
+        "",
+        "Records:",
+    ]
+    for i, thought in enumerate(thoughts, start=1):
+        metadata = thought.get("metadata") or {}
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+        metadata_json = json.dumps(metadata, sort_keys=True)
+        lines.append(f"{i}. id={thought['id']} metadata={metadata_json}")
+        lines.append(str(thought["content"]))
+        lines.append("")
+    return "\n".join(lines)
+
+
+async def complete_maintenance_prompt(prompt: str) -> str:
+    provider = MAINTENANCE_CONFIG.get("provider", "litellm")
+    model = MAINTENANCE_CONFIG.get("model")
+    if not model:
+        raise ValueError("config.yaml: maintenance.model is required")
+
+    if provider == "litellm":
+        base_url = MAINTENANCE_CONFIG.get("litellm_url")
+        api_key_name = "LITELLM_API_KEY"
+        if not base_url:
+            raise ValueError(
+                "config.yaml: maintenance.litellm_url is required "
+                "when maintenance.provider is litellm"
+            )
+    elif provider == "openrouter":
+        base_url = "https://openrouter.ai/api/v1"
+        api_key_name = "OPENROUTER_API_KEY"
+    else:
+        raise ValueError(
+            f"Unknown maintenance.provider: {provider!r}. "
+            "Expected one of: openrouter, litellm"
+        )
+
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=os.environ[api_key_name], base_url=base_url)
+    result = await client.chat.completions.create(
+        model=model,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You consolidate a personal research memory log. "
+                    "Preserve only information likely to matter later."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        temperature=MAINTENANCE_CONFIG.get("temperature", 0.2),
+    )
+    return (result.choices[0].message.content or "").strip()
+
+
+async def archive_thoughts(thought_ids: list[str], maintenance_run_id: str) -> None:
+    if not thought_ids:
+        return
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE thoughts
+            SET metadata = metadata || jsonb_build_object(
+                    'archived', true,
+                    'archived_at', now(),
+                    'maintenance_run_id', $2
+                )
+            WHERE id = ANY($1::uuid[])
+            """,
+            thought_ids,
+            maintenance_run_id,
+        )
+
+
+async def run_maintenance_once() -> dict:
+    since_hours = int(MAINTENANCE_CONFIG.get("lookback_hours", 24))
+    batch_size = int(MAINTENANCE_CONFIG.get("batch_size", 50))
+    thoughts = await maintenance_thoughts(since_hours, batch_size)
+    if not thoughts:
+        return {"processed": 0, "syntheses": 0}
+
+    prompt = _maintenance_prompt(thoughts)
+    synthesis = await complete_maintenance_prompt(prompt)
+    if not synthesis:
+        return {"processed": 0, "syntheses": 0}
+
+    run_id = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
+    thought_ids = [str(thought["id"]) for thought in thoughts]
+    await store_thought(
+        synthesis,
+        {
+            "type": "synthesis",
+            "source": "openbrain-maintenance",
+            "source_type": "maintenance",
+            "thought_ids": thought_ids,
+            "maintenance_run_id": run_id,
+        },
+    )
+    await archive_thoughts(thought_ids, run_id)
+    return {"processed": len(thoughts), "syntheses": 1}
 
 
 async def _entity_text(table: str, row: dict) -> str:
@@ -737,7 +876,7 @@ async def search_library_vec(
     pool = await get_pool()
     embedding = await embed(query)
 
-    conditions = ["c.embedding IS NOT NULL", f"1 - (c.embedding <=> $1) > $2"]
+    conditions = ["c.embedding IS NOT NULL", "1 - (c.embedding <=> $1) > $2"]
     params: list = [embedding, threshold]
     p = 3
 

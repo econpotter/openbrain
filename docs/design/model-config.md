@@ -77,3 +77,23 @@ Steps:
 People and project embeddings are not just their structured fields. They incorporate snippets from thoughts that mention them, and are refreshed automatically in the background each time a new thought names them. This means entity search improves over time without manual intervention.
 
 `brain.refresh_all_embeddings(entity_type="all"|"people"|"projects")` forces a full refresh — useful after a backend switch or bulk data import.
+
+---
+
+## Maintenance model
+
+Nightly thought consolidation uses the `maintenance` section in `config.yaml`:
+
+```yaml
+maintenance:
+  provider: litellm
+  model: <local-or-remote-chat-model>
+  litellm_url: http://litellm:4000
+  run_at: "02:00"
+  lookback_hours: 24
+  batch_size: 50
+```
+
+The maintenance model does not need to match the embedding model. It reads raw
+thoughts, writes synthesized memories as `type: synthesis`, and marks processed
+inputs with `metadata.archived = true`.

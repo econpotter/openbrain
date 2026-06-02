@@ -96,6 +96,7 @@ Open `.env` and set:
 ```
 DATABASE_URL=postgresql://localhost/openbrain
 VOYAGE_API_KEY=your_key_here
+MCP_ACCESS_KEY=your_mcp_key_here
 ```
 
 Then re-run the installer to continue:
@@ -178,6 +179,7 @@ Once the service is running, connect whichever clients you use.
 URL: `https://<your-hostname>:8443/mcp`
 
 Claude.ai requires HTTPS. Set up Caddy first (step 4b) if your host is VPN-only.
+If you set `MCP_ACCESS_KEY`, configure the connector to send it as a Bearer token.
 
 #### Claude Code (CLI)
 

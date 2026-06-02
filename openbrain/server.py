@@ -7,51 +7,28 @@ Transport is controlled by the MCP_TRANSPORT environment variable:
 """
 
 import os
-import secrets
 from fastmcp import FastMCP
-from mcp.server.auth.provider import AccessToken
-from mcp.server.auth.settings import AuthSettings
+from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
 from openbrain.tools import capture, search, library, entities, briefing
 
 
-class StaticTokenVerifier:
-    """Accept exactly one bearer token from MCP clients."""
-
-    def __init__(self, token: str):
-        self.token = token
-
-    async def verify_token(self, token: str) -> AccessToken | None:
-        if not secrets.compare_digest(token, self.token):
-            return None
-        return AccessToken(
-            token=token,
-            client_id="openbrain",
-            scopes=[],
-            expires_at=None,
-        )
-
-
-def _build_auth() -> tuple[AuthSettings | None, StaticTokenVerifier | None]:
+def _build_auth() -> StaticTokenVerifier | None:
     access_key = os.getenv("MCP_ACCESS_KEY", "").strip()
     if not access_key:
-        return None, None
+        return None
 
-    caddy_hostname = os.getenv("CADDY_HOSTNAME", "").strip()
-    if caddy_hostname:
-        public_url = f"https://{caddy_hostname}:8443/mcp"
-    else:
-        port = int(os.getenv("PORT", "8000"))
-        public_url = f"http://127.0.0.1:{port}/mcp"
-
-    auth = AuthSettings(
-        issuer_url=public_url,
-        resource_server_url=public_url,
+    return StaticTokenVerifier(
+        tokens={
+            access_key: {
+                "client_id": "openbrain",
+                "scopes": [],
+            }
+        }
     )
-    return auth, StaticTokenVerifier(access_key)
 
 
 def _build_server() -> FastMCP:
-    auth, token_verifier = _build_auth()
+    auth = _build_auth()
     return FastMCP(
         "Open Brain",
         instructions="""
@@ -65,7 +42,6 @@ Open Brain is a personal AI memory and knowledge base. Use these patterns when i
 - If ingest_document reports missing metadata, do NOT re-ingest. Instead ask the user for a BibTeX entry or title, then call update_library(query=<title>, bibtex=...) or update_library(query=<title>, title=...) to fix the record in place.
 """.strip(),
         auth=auth,
-        token_verifier=token_verifier,
     )
 
 mcp = _build_server()

@@ -44,31 +44,26 @@ sys.modules.setdefault("fastmcp", fastmcp)
 mcp = types.ModuleType("mcp")
 mcp_server = types.ModuleType("mcp.server")
 mcp_server_auth = types.ModuleType("mcp.server.auth")
-mcp_server_auth_provider = types.ModuleType("mcp.server.auth.provider")
-mcp_server_auth_settings = types.ModuleType("mcp.server.auth.settings")
-
-
-class _AccessToken:
-    def __init__(self, token, client_id, scopes, expires_at):
-        self.token = token
-        self.client_id = client_id
-        self.scopes = scopes
-        self.expires_at = expires_at
-
-
-class _AuthSettings:
-    def __init__(self, issuer_url, resource_server_url):
-        self.issuer_url = issuer_url
-        self.resource_server_url = resource_server_url
-
-
-mcp_server_auth_provider.AccessToken = _AccessToken
-mcp_server_auth_settings.AuthSettings = _AuthSettings
 sys.modules.setdefault("mcp", mcp)
 sys.modules.setdefault("mcp.server", mcp_server)
 sys.modules.setdefault("mcp.server.auth", mcp_server_auth)
-sys.modules.setdefault("mcp.server.auth.provider", mcp_server_auth_provider)
-sys.modules.setdefault("mcp.server.auth.settings", mcp_server_auth_settings)
+
+fastmcp_server = types.ModuleType("fastmcp.server")
+fastmcp_server_auth = types.ModuleType("fastmcp.server.auth")
+fastmcp_server_auth_providers = types.ModuleType("fastmcp.server.auth.providers")
+fastmcp_server_auth_providers_jwt = types.ModuleType("fastmcp.server.auth.providers.jwt")
+
+
+class _StaticTokenVerifier:
+    def __init__(self, tokens):
+        self.tokens = tokens
+
+
+fastmcp_server_auth_providers_jwt.StaticTokenVerifier = _StaticTokenVerifier
+sys.modules.setdefault("fastmcp.server", fastmcp_server)
+sys.modules.setdefault("fastmcp.server.auth", fastmcp_server_auth)
+sys.modules.setdefault("fastmcp.server.auth.providers", fastmcp_server_auth_providers)
+sys.modules.setdefault("fastmcp.server.auth.providers.jwt", fastmcp_server_auth_providers_jwt)
 
 os.environ.setdefault("DATABASE_URL", "postgresql://test/openbrain")
 
@@ -76,12 +71,19 @@ os.environ.setdefault("DATABASE_URL", "postgresql://test/openbrain")
 class ServerAuthTests(unittest.TestCase):
     def setUp(self):
         self._saved_env = dict(os.environ)
-        sys.modules.pop("openbrain.server", None)
+        self._clear_server_module()
 
     def tearDown(self):
         os.environ.clear()
         os.environ.update(self._saved_env)
+        self._clear_server_module()
+
+    @staticmethod
+    def _clear_server_module():
         sys.modules.pop("openbrain.server", None)
+        package = sys.modules.get("openbrain")
+        if package is not None and hasattr(package, "server"):
+            delattr(package, "server")
 
     def test_server_builds_bearer_token_auth_when_key_is_present(self):
         os.environ["MCP_ACCESS_KEY"] = "secret-token"
@@ -90,24 +92,17 @@ class ServerAuthTests(unittest.TestCase):
         from openbrain import server
 
         self.assertIsNotNone(server.mcp.kwargs["auth"])
-        self.assertIsNotNone(server.mcp.kwargs["token_verifier"])
-        self.assertEqual(server.mcp.kwargs["auth"].resource_server_url, "https://brain.example:8443/mcp")
+        self.assertEqual(
+            server.mcp.kwargs["auth"].tokens,
+            {"secret-token": {"client_id": "openbrain", "scopes": []}},
+        )
 
-    def test_static_token_verifier_accepts_only_the_configured_key(self):
+    def test_server_disables_auth_when_key_is_absent(self):
+        os.environ.pop("MCP_ACCESS_KEY", None)
+
         from openbrain import server
 
-        verifier = server.StaticTokenVerifier("secret-token")
-
-        self.assertIsNone(self._run(verifier.verify_token("wrong")))
-        token = self._run(verifier.verify_token("secret-token"))
-        self.assertEqual(token.client_id, "openbrain")
-        self.assertEqual(token.token, "secret-token")
-
-    @staticmethod
-    def _run(coro):
-        import asyncio
-
-        return asyncio.run(coro)
+        self.assertIsNone(server.mcp.kwargs["auth"])
 
 
 if __name__ == "__main__":

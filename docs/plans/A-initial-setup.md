@@ -1,4 +1,4 @@
-# Open Brain — Implementation Plan
+# openbrain — Implementation Plan
 
 > **Historical plan.** This document records the initial implementation sketch.
 > For the current architecture and commands, use `README.md` and
@@ -321,7 +321,7 @@ sudo tailscale up
 # 3. systemd unit for MCP server
 # /etc/systemd/system/openbrain-mcp.service
 [Unit]
-Description=Open Brain MCP Server
+Description=openbrain MCP Server
 After=postgresql.service
 
 [Service]

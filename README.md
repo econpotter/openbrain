@@ -1,4 +1,4 @@
-# Open Brain
+# openbrain
 
 A personal AI memory and knowledge base for researchers. One Postgres database,
 one MCP server, any AI can plug in. No middleware, no SaaS, no subscriptions

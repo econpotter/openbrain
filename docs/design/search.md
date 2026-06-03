@@ -2,7 +2,7 @@
 
 ## Overview
 
-Open Brain uses hybrid search — vector similarity as the primary ranker, full-text search as an OR inclusion condition. This catches both semantic matches (embeddings) and exact name/term matches (FTS), which embeddings can miss for proper nouns and technical identifiers.
+openbrain uses hybrid search — vector similarity as the primary ranker, full-text search as an OR inclusion condition. This catches both semantic matches (embeddings) and exact name/term matches (FTS), which embeddings can miss for proper nouns and technical identifiers.
 
 ---
 

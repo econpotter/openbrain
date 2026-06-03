@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run scheduled Open Brain thought consolidation."""
+"""Run scheduled openbrain thought consolidation."""
 
 import argparse
 import asyncio

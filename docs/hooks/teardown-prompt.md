@@ -6,7 +6,7 @@ session is closing:
 ```text
 SYSTEM INTERRUPT: The session is closing.
 
-Silently review the session and save durable Open Brain memories using
+Silently review the session and save durable openbrain memories using
 capture_thought. Capture only information likely to matter in future sessions:
 stable project constraints, user preferences, decisions and reasons, non-obvious
 fixes, milestones, or named follow-ups.

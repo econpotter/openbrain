@@ -8,7 +8,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 SERVICE_NAME="openbrain-mcp"
 CURRENT_USER="$(whoami)"
 
-echo "=== Open Brain install ==="
+echo "=== openbrain install ==="
 echo "Project dir: $PROJECT_DIR"
 echo "User:        $CURRENT_USER"
 echo

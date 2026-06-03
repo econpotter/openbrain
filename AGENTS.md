@@ -1,4 +1,4 @@
-# AGENTS.md — Open Brain
+# AGENTS.md — openbrain
 
 Read this before doing anything else in this repository.
 
@@ -6,7 +6,7 @@ Read this before doing anything else in this repository.
 
 ## What this repo is
 
-Open Brain is a personal AI memory and knowledge base. It exposes MCP tools
+openbrain is a personal AI memory and knowledge base. It exposes MCP tools
 that let any AI assistant (Claude, Gemini) read and write to a Postgres
 database. MCP is the canonical agent interface. Additional interfaces may be
 added later for concrete workflows if they reuse the same core domain logic.
@@ -47,7 +47,7 @@ openbrain/
 ## Core invariants
 
 - **All database access goes through `brain.py`.** Tool files call `brain.*` functions; they do not import asyncpg or write SQL directly.
-- **Treat `schemas/core/` as the pre-alpha install-time baseline.** Once Open Brain contains real data, introduce a separate migration mechanism for later schema changes.
+- **Treat `schemas/core/` as the pre-alpha install-time baseline.** Once openbrain contains real data, introduce a separate migration mechanism for later schema changes.
 - **`thoughts` is append-only.** Never `DELETE` or `UPDATE` thought content. Corrections go in as new thoughts.
 - **One `register(mcp)` per tool file.** Each file in `tools/` exports exactly one function that registers its tools with the FastMCP instance.
 - **No hardcoded model providers or names.** Read model config from `config.yaml`. See `docs/design/model-config.md`.

@@ -8,7 +8,7 @@ Route all model calls through a configurable backend (LiteLLM or direct provider
 
 ## Status
 
-- [x] Open Brain MCP server running on Computer A
+- [x] openbrain MCP server running on Computer A
 - [x] LiteLLM embedding backend supported through `config.yaml`
 - [x] Nightly maintenance script written
 - [x] Nightly maintenance runs from the Docker Compose stack

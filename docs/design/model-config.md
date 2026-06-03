@@ -2,7 +2,7 @@
 
 ## Goal
 
-No model provider or model name is hardwired into Open Brain. Embedding provider,
+No model provider or model name is hardwired into openbrain. Embedding provider,
 model selection, and routing are configurable without code changes.
 
 ---

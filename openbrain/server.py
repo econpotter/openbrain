@@ -1,5 +1,5 @@
 """
-server.py — FastMCP server exposing Open Brain tools.
+server.py — FastMCP server exposing openbrain tools.
 
 Transport is controlled by config.yaml:
   stdio  — for local development and testing
@@ -31,9 +31,9 @@ def _build_auth() -> StaticTokenVerifier | None:
 def _build_server() -> FastMCP:
     auth = _build_auth()
     return FastMCP(
-        "Open Brain",
+        "openbrain",
         instructions="""
-Open Brain is a personal AI memory and knowledge base. Use these patterns when interacting with it:
+openbrain is a personal AI memory and knowledge base. Use these patterns when interacting with it:
 
 - "What's on my plate today/this week?" — call get_briefing(days=1|7) AND gcal_list_events for the same date range, then synthesize both into a unified response.
 - "What do I know about X?" — call search_brain(query).

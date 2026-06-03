@@ -1,4 +1,4 @@
-# Non-secret configuration for Open Brain.
+# Non-secret configuration for openbrain.
 # API keys and DATABASE_URL go in .env — not here.
 
 library_path: /mnt/data/openbrain/library

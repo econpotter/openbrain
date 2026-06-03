@@ -341,7 +341,7 @@ async def maintenance_thoughts(
 
 def _maintenance_prompt(thoughts: list[dict]) -> str:
     lines = [
-        "Consolidate these Open Brain memory records.",
+        "Consolidate these openbrain memory records.",
         "",
         "Tasks:",
         "- Deduplicate redundant entries.",

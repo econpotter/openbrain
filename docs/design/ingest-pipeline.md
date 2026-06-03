@@ -2,7 +2,7 @@
 
 ## Overview
 
-Documents enter Open Brain through `ingest_document` (MCP tool) or the
+Documents enter openbrain through `ingest_document` (MCP tool) or the
 `python -m openbrain.cli` local CLI. Both use the same pipeline in
 `brain.ingest_document_pipeline()`.
 

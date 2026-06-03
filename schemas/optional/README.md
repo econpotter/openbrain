@@ -1,6 +1,6 @@
 # Optional Schemas
 
-Optional schemas add capabilities that are not required by the core Open Brain
+Optional schemas add capabilities that are not required by the core openbrain
 runtime. Each optional module should document:
 
 - its purpose and prerequisites

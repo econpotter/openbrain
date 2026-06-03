@@ -1,5 +1,5 @@
 """
-cli.py — CLI for ingesting documents into the Open Brain library.
+cli.py — CLI for ingesting documents into the openbrain library.
 
 Usage:
     python -m openbrain.cli paper.pdf
@@ -17,7 +17,7 @@ from rich.table import Table
 
 from openbrain import brain
 
-app = typer.Typer(help="Ingest documents into the Open Brain library.")
+app = typer.Typer(help="Ingest documents into the openbrain library.")
 console = Console()
 
 
@@ -48,7 +48,7 @@ def ingest(
     doc_type: str = typer.Option("paper", "--doc-type", "-t", help="Document type"),
     force: bool = typer.Option(False, "--force", "-f", help="Re-ingest duplicates"),
 ):
-    """Ingest a PDF/text file or directory of files into the Open Brain library."""
+    """Ingest a PDF/text file or directory of files into the openbrain library."""
     target = Path(path).expanduser()
 
     if target.is_dir():

@@ -107,7 +107,7 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 -- Structured connection discovery adapted from OB1:
--- schemas/enhanced-thoughts/schema.sql. Open Brain also compares tags and
+-- schemas/enhanced-thoughts/schema.sql. openbrain also compares tags and
 -- projects because its capture path stores both as first-class metadata.
 CREATE OR REPLACE FUNCTION get_thought_connections(
     p_thought_id UUID,
@@ -211,7 +211,7 @@ AS $$
 $$;
 
 -- Aggregate statistics adapted from OB1:
--- schemas/enhanced-thoughts/schema.sql. Open Brain adds library totals, tags,
+-- schemas/enhanced-thoughts/schema.sql. openbrain adds library totals, tags,
 -- source types, and sensitivity tiers for its broader core schema.
 CREATE OR REPLACE FUNCTION brain_stats_aggregate()
 RETURNS JSONB

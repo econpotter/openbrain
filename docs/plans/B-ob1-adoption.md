@@ -3,9 +3,9 @@
 ## Goal
 
 Use [OB1](../../../OB1/) as a source of proven schema patterns, workflows, and
-integrations while preserving Open Brain's self-hosted Python architecture.
+integrations while preserving openbrain's self-hosted Python architecture.
 
-Open Brain has not been deployed or used yet. This is the right time to replace
+openbrain has not been deployed or used yet. This is the right time to replace
 the historical migration sequence with a clean baseline schema, reconcile the
 documentation with the implementation, and make deliberate choices about which
 OB1 capabilities belong in the core.
@@ -14,12 +14,12 @@ OB1 capabilities belong in the core.
 
 ## Positioning
 
-Open Brain and OB1 share the same central idea: `thoughts` are the universal
+openbrain and OB1 share the same central idea: `thoughts` are the universal
 memory record, and AI clients read and write them through MCP tools.
 
 They differ in implementation strategy:
 
-| Area | Open Brain | OB1 |
+| Area | openbrain | OB1 |
 |------|------------|-----|
 | Database | Self-hosted Postgres + pgvector | Supabase Postgres + pgvector |
 | Server | Python + FastMCP | Deno Edge Function + MCP SDK |
@@ -28,7 +28,7 @@ They differ in implementation strategy:
 | Core data model | Thoughts, document library, chunks, people, projects, links | Minimal thoughts table, extended through optional contributions |
 | Primary interface | MCP-first, AI-mediated | MCP core with optional REST gateways and dashboards |
 
-The target is not an OB1 fork. Open Brain remains its own runtime and adopts OB1
+The target is not an OB1 fork. openbrain remains its own runtime and adopts OB1
 features selectively. This avoids coupling the system to Supabase while still
 benefiting from OB1's larger library of schemas, recipes, skills, and
 integrations.
@@ -52,7 +52,7 @@ integrations.
 - **Keep optional OB1 contributions recognizable.** When adapting an OB1
   capability, preserve its conceptual data shape where practical so future
   upstream improvements remain easy to evaluate.
-- **Avoid parallel models for the same concept.** Open Brain already has
+- **Avoid parallel models for the same concept.** openbrain already has
   first-class `people`, `projects`, `links`, `library`, and `chunks` tables.
   OB1 contributions that introduce overlapping models must be reconciled rather
   than copied verbatim.
@@ -68,7 +68,7 @@ integrations.
 - Reconcile README, architecture, and model configuration docs with the current
   implementation.
 - Replace `migrations/` with a fresh `schemas/core/` baseline.
-- Fold the final state of the existing Open Brain schema into that baseline.
+- Fold the final state of the existing openbrain schema into that baseline.
 - Review OB1's foundational thoughts schema for improvements.
 - Add content fingerprints and a canonical `upsert_thought` function.
 - Update Python write paths and setup scripts to use the new baseline.
@@ -113,7 +113,7 @@ schemas/
 ```
 
 The initial files are install-time schema modules, not immutable production
-migrations. Once Open Brain is deployed and contains real data, freeze this
+migrations. Once openbrain is deployed and contains real data, freeze this
 baseline and add a separate migration mechanism for future changes.
 
 ### `001_extensions.sql`
@@ -166,14 +166,14 @@ The following OB1 enhanced-thought fields are promoted into core:
 6. Return enough information for callers to distinguish an insert from a
    duplicate merge.
 
-The final function signature should support Open Brain's embedding write path.
+The final function signature should support openbrain's embedding write path.
 OB1's SQL function is a starting point, not a drop-in implementation: Open
 Brain computes embeddings in Python, while OB1's RPC examples often insert
 without embeddings and let surrounding services manage enrichment.
 
 ### `003_library.sql`
 
-Preserve Open Brain's document ingestion model:
+Preserve openbrain's document ingestion model:
 
 - `library`
 - `chunks`
@@ -184,11 +184,11 @@ Preserve Open Brain's document ingestion model:
 - DOI and BibTeX fields
 - foreign key cascade from `chunks` to `library`
 
-This is an Open Brain feature, not part of the minimal OB1 baseline.
+This is an openbrain feature, not part of the minimal OB1 baseline.
 
 ### `004_entities.sql`
 
-Preserve Open Brain's explicit entities:
+Preserve openbrain's explicit entities:
 
 - `people`
 - `projects`
@@ -212,7 +212,7 @@ Consolidate search functions against the final schema:
 - `match_people`
 - `match_projects`
 
-Review OB1's enhanced text-search function as an input to the design. Open Brain
+Review OB1's enhanced text-search function as an input to the design. openbrain
 already performs hybrid vector and full-text search in Python, so avoid adding
 an overlapping RPC unless it improves a specific retrieval path.
 
@@ -255,16 +255,16 @@ These OB1 concepts should be evaluated while creating `schemas/core/`:
 
 | OB1 Concept | Decision | Notes |
 |-------------|----------|-------|
-| Universal `thoughts` table | Adopt | Already central to Open Brain |
+| Universal `thoughts` table | Adopt | Already central to openbrain |
 | Normalized content fingerprints | Adopt | Prevent duplicate capture and make imports idempotent |
 | `upsert_thought` RPC | Adapt | Include Python-generated embeddings and structured-column synchronization |
-| Top-level `type` | Adopt | Already present in Open Brain |
+| Top-level `type` | Adopt | Already present in openbrain |
 | Top-level `source_type` | Adopt | Better filtering than parsing JSONB |
 | `importance` | Adopted | Ordinal `0-6` core ranking signal |
 | `quality_score` | Adopted | `0-100` cleanup and enrichment signal |
 | `sensitivity_tier` | Adopted | Constrained safety foundation |
 | `enriched` | Adopted | Sticky lifecycle marker for future enrichment |
-| FTS index | Adopt | Already present in Open Brain |
+| FTS index | Adopt | Already present in openbrain |
 | Dashboard-specific utility RPCs | Defer | Add only with a REST or dashboard use case |
 | Supabase RLS policies | Skip for now | Single-user self-hosted deployment does not need Supabase roles |
 
@@ -272,7 +272,7 @@ These OB1 concepts should be evaluated while creating `schemas/core/`:
 
 Review these only after the core baseline and trial runs are complete:
 
-| OB1 Area | Initial Classification | Open Brain Consideration |
+| OB1 Area | Initial Classification | openbrain Consideration |
 |----------|------------------------|--------------------------|
 | Agent memory | Adapt | Strong candidate for governed agent write-back and recall traces |
 | Provenance chains | Adapt | Useful for nightly synthesis and derived artifacts |
@@ -349,7 +349,7 @@ generated `TSVECTOR` columns, and Postgres-specific indexing.
 
 ### Phase 5: Enhanced Thought Queries
 
-Adapt OB1's enhanced-thought RPCs behind Open Brain's Python domain layer. MCP
+Adapt OB1's enhanced-thought RPCs behind openbrain's Python domain layer. MCP
 tools and future REST handlers should call `brain.py`; they should not treat SQL
 RPCs as the application interface.
 
@@ -429,7 +429,7 @@ This plan's core redesign is complete when:
 - Docs, config, schema vector dimensions, and runtime providers agree.
 - Every thought creation path uses the canonical deduplicating upsert.
 - Duplicate capture behavior is tested and documented.
-- Existing Open Brain search, library, entity, and briefing features pass trial
+- Existing openbrain search, library, entity, and briefing features pass trial
   runs.
 - Optional OB1 capabilities are listed with explicit adoption decisions rather
   than copied into the baseline implicitly.

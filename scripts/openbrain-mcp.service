@@ -1,5 +1,5 @@
 [Unit]
-Description=Open Brain MCP Server
+Description=openbrain MCP Server
 After=network.target postgresql.service
 
 [Service]

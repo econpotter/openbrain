@@ -1,5 +1,5 @@
 [Unit]
-Description=Daily Open Brain backup
+Description=Daily openbrain backup
 
 [Timer]
 OnCalendar=daily

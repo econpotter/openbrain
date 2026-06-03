@@ -1,4 +1,4 @@
-# Open Brain Auto-Capture Instructions
+# openbrain Auto-Capture Instructions
 
 Use these instructions in global or project-level agent instructions. This file
 is source text only; it does not activate auto-capture unless an agent harness
@@ -6,11 +6,11 @@ loads it.
 
 ## Long-Term Memory Protocol
 
-You have access to Open Brain MCP tools such as `search_brain` and
+You have access to openbrain MCP tools such as `search_brain` and
 `capture_thought`. Memory tracking is a passive background task.
 
 At the start of a substantial task, or when entering an unfamiliar project,
-search Open Brain for relevant context before making implementation decisions.
+search openbrain for relevant context before making implementation decisions.
 Use `search_brain` for broad context and narrower search tools when the target
 entity or document type is clear.
 

@@ -1,5 +1,5 @@
 [Unit]
-Description=Open Brain backup
+Description=openbrain backup
 After=postgresql.service
 
 [Service]

@@ -1,6 +1,6 @@
-# ARCHITECTURE.md — Open Brain
+# ARCHITECTURE.md — openbrain
 
-Open Brain is a personal AI memory and knowledge base. It gives any AI assistant (Claude, Gemini) persistent, searchable memory without SaaS lock-in: one Postgres database, one MCP server, all interaction mediated through the AI. You never touch the database directly — the AI is the interface.
+openbrain is a personal AI memory and knowledge base. It gives any AI assistant (Claude, Gemini) persistent, searchable memory without SaaS lock-in: one Postgres database, one MCP server, all interaction mediated through the AI. You never touch the database directly — the AI is the interface.
 
 ---
 
@@ -33,7 +33,7 @@ The core abstraction is the **thought** — an append-only record of anything wo
 | **MCP server** | FastMCP server exposing tools to Claude/Gemini via stdio or HTTP. | `openbrain/server.py` |
 | **tools/** | One file per tool group; each exports a `register(mcp)` function. | `openbrain/tools/capture.py`, `openbrain/tools/search.py`, `openbrain/tools/library.py`, `openbrain/tools/entities.py`, `openbrain/tools/briefing.py` |
 | **ingest CLI** | Standalone CLI for ingesting documents from the local filesystem. | `openbrain/cli.py` |
-| **schemas/core/** | Clean SQL baseline for initializing a new Open Brain database. | `schemas/core/` |
+| **schemas/core/** | Clean SQL baseline for initializing a new openbrain database. | `schemas/core/` |
 | **Postgres + pgvector** | Storage: structured rows + vector indexes for semantic search. | (external) |
 | **Embedding provider** | Pluggable: Voyage AI, OpenRouter, or an OpenAI-compatible LiteLLM gateway. | `openbrain/brain.py` |
 | **Maintenance job** | Docker Compose service that consolidates recent raw thoughts with the configured maintenance model. | `scripts/openbrain-maintenance.py` |
@@ -125,6 +125,6 @@ get_briefing(days=N)
 
 - Not a multi-tenant or SaaS system — single-user, self-hosted only.
 - Not a general-purpose RAG pipeline — purpose-built for personal memory.
-- Not a LiteLLM proxy — Open Brain is a client of the LiteLLM gateway, not its host.
+- Not a LiteLLM proxy — openbrain is a client of the LiteLLM gateway, not its host.
 - Not primarily a web application. A REST API or dashboard may be added later
   where it supports a concrete workflow.

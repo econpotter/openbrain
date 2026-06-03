@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# backup.sh — Back up the Open Brain database and library files.
+# backup.sh — Back up the openbrain database and library files.
 #
 # Usage:
 #   bash scripts/backup.sh

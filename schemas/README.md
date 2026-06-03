@@ -6,7 +6,7 @@ Brain instance. The files are applied in numeric order.
 `schemas/optional/` is reserved for capabilities that are not required by the
 core runtime.
 
-`scripts/setup_db.sh` installs this baseline directly. Once Open Brain contains
+`scripts/setup_db.sh` installs this baseline directly. Once openbrain contains
 real data, later schema changes should use a separate migration mechanism.
 
 ## Canonical Thought Writes

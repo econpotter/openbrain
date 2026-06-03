@@ -6,7 +6,7 @@ hooks. They are not active while they live in this repository.
 Use hooks to make auto-capture more reliable than instructions alone:
 
 - session start or prompt-submit hooks should remind the agent to recall
-  relevant Open Brain context.
+  relevant openbrain context.
 - stop or session-teardown hooks should ask the agent to capture durable
   facts before the session closes.
 
@@ -49,5 +49,5 @@ Claude.ai project instructions instead.
 ## Custom Harnesses
 
 For a custom CLI or script, call the agent once at teardown with the stop prompt
-from this directory and ensure the Open Brain MCP tools are available to that
+from this directory and ensure the openbrain MCP tools are available to that
 agent call.

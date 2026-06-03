@@ -19,7 +19,7 @@ case "${1:-}" in
         ;;
 esac
 
-echo "== Open Brain verification =="
+echo "== openbrain verification =="
 echo
 echo "[1/2] Running Python-level tests..."
 (

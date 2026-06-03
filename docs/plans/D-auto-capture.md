@@ -21,7 +21,7 @@ Use three layers:
 1. **Global or project instructions** define the capture policy.
 2. **Lifecycle hooks** enforce recall and teardown capture where a client
    supports them.
-3. **Open Brain MCP tools** execute the reads and writes.
+3. **openbrain MCP tools** execute the reads and writes.
 
 The OB1 `auto-capture` recipe is the right near-term model: it is a behavioral
 workflow around evaluated session output. The OB1 adaptive capture
@@ -80,12 +80,12 @@ Preferred hook behavior:
 
 | Hook | Behavior |
 |------|----------|
-| `session_start` | Remind the agent to search Open Brain for relevant context on substantial or unfamiliar tasks. |
+| `session_start` | Remind the agent to search openbrain for relevant context on substantial or unfamiliar tasks. |
 | `stop` / teardown | Ask the agent to call `capture_thought` for durable session output before closing. |
 
 Do not install hook templates blindly. First verify the hook schema and payload
 format for the client or harness. A prompt-only hook is useful only if the hook
-actually re-enters the agent with Open Brain MCP tools available.
+actually re-enters the agent with openbrain MCP tools available.
 
 ---
 
@@ -108,7 +108,7 @@ Use MCP instructions for tool affordances:
 
 Do not add OB1 adaptive classification tables yet.
 
-That recipe becomes useful when Open Brain has a capture surface with a real
+That recipe becomes useful when openbrain has a capture surface with a real
 confirmation loop, such as:
 
 - a quick-capture CLI,
@@ -134,7 +134,7 @@ maintenance synthesis.
   an explicit include/copy of it.
 - Hook templates are adapted and installed for clients that support lifecycle
   hooks.
-- A test session produces searchable Open Brain captures without the user saying
+- A test session produces searchable openbrain captures without the user saying
   "remember this."
 - The nightly maintenance job consolidates captured raw/session memories into
   synthesis thoughts.

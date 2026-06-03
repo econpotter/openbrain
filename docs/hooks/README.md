@@ -22,9 +22,9 @@ copy outside the repository.
 ## Codex
 
 `codex-hooks.json` uses a Codex-like prompt hook shape with
-`session_start`, `user_prompt_submit`, and `stop` events. If your Codex build
-supports this schema, place an adapted copy where Codex loads hooks, commonly a
-global file such as:
+`session_start`, `user_prompt_submit`, `pre_compact`, and `session_end`
+events. If your Codex build supports this schema, place an adapted copy where
+Codex loads hooks, commonly a global file such as:
 
 ```text
 ~/.codex/hooks.json
@@ -37,8 +37,9 @@ for your Codex build.
 
 `claude-code-hooks.json` uses Claude Code's direct settings format for
 `~/.claude/settings.json`, not the plugin `{"hooks": ...}` wrapper format. It
-uses prompt hooks for `UserPromptSubmit` and `Stop`, because those are the
-events where Claude Code prompt hooks can re-enter the agent with context.
+uses prompt hooks for `UserPromptSubmit`, `PreCompact`, and `SessionEnd`,
+because those are the events where Claude Code prompt hooks can re-enter the
+agent with context or preserve state before compaction and shutdown.
 
 If you install it in a plugin `hooks/hooks.json`, wrap the object in a top-level
 `{"hooks": ...}` object. If your Claude Code installation does not support

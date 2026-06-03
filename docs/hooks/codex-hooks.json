@@ -21,18 +21,31 @@
       ]
     }
   ],
-  "stop": [
+  "pre_compact": [
     {
       "prompt": [
-        "Open Brain capture reminder: the session is ending. Silently review",
-        "the completed work and call capture_thought for durable facts likely",
-        "to matter later: decisions and reasons, non-obvious fixes, stable",
-        "project constraints, user preferences, milestones, or named follow-ups.",
-        "Do not capture raw transcripts, command output, routine progress,",
-        "obvious duplicates, or unvalidated guesses. Prefer one concise,",
-        "self-contained capture per durable item, with tags/projects/people",
-        "metadata when clear. Do not address the user unless capture fails in a",
-        "way they need to know about."
+        "Open Brain pre-compact reminder: context is about to be compressed.",
+        "Silently review the session and call capture_thought for any durable",
+        "facts not yet saved to Open Brain: decisions and reasons, non-obvious",
+        "fixes, stable project constraints, user preferences, milestones, or",
+        "named follow-ups. Prefer one concise, self-contained capture per",
+        "item with tags/projects/people metadata when clear. Do not capture",
+        "raw transcripts, routine progress, or unvalidated guesses."
+      ]
+    }
+  ],
+  "session_end": [
+    {
+      "prompt": [
+        "Open Brain session-end reminder: the session is ending. Silently",
+        "review the completed work and call capture_thought for durable facts",
+        "likely to matter later: decisions and reasons, non-obvious fixes,",
+        "stable project constraints, user preferences, milestones, or named",
+        "follow-ups. Do not capture raw transcripts, command output, routine",
+        "progress, obvious duplicates, or unvalidated guesses. Prefer one",
+        "concise, self-contained capture per durable item, with tags/projects/",
+        "people metadata when clear. Do not address the user unless capture",
+        "fails in a way they need to know about."
       ]
     }
   ]

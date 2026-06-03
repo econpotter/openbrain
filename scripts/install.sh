@@ -27,7 +27,7 @@ echo "[2/4] Checking .env..."
 if [ ! -f "$PROJECT_DIR/.env" ]; then
     cp "$PROJECT_DIR/.env.example" "$PROJECT_DIR/.env"
     echo "      Created .env from .env.example."
-    echo "      *** Fill in DATABASE_URL, the API key for embed.provider, and MCP_ACCESS_KEY if you want HTTP auth. ***"
+    echo "      *** Fill in DATABASE_URL, provider API keys, and MCP_ACCESS_KEY if you want HTTP auth. Backup location comes from library_path. ***"
     echo "      Then re-run this script."
     exit 0
 else

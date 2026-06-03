@@ -27,7 +27,7 @@ async def _run_once() -> None:
 
 
 async def _run_loop() -> None:
-    run_at = brain.MAINTENANCE_CONFIG.get("run_at", "02:00")
+    run_at = brain.EXTRACTION_CONFIG.get("run_at", "02:00")
     while True:
         wait_seconds = _seconds_until(run_at)
         print(f"Next maintenance run at {run_at}; sleeping {wait_seconds:.0f}s.")
@@ -44,7 +44,7 @@ def main() -> None:
     parser.add_argument(
         "--loop",
         action="store_true",
-        help="Run every day at maintenance.run_at from config.yaml.",
+        help="Run every day at extraction.run_at from config.yaml.",
     )
     args = parser.parse_args()
 

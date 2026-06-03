@@ -87,7 +87,6 @@ class ServerAuthTests(unittest.TestCase):
 
     def test_server_builds_bearer_token_auth_when_key_is_present(self):
         os.environ["MCP_ACCESS_KEY"] = "secret-token"
-        os.environ["CADDY_HOSTNAME"] = "brain.example"
 
         from openbrain import server
 

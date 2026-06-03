@@ -108,7 +108,7 @@ get_briefing(days=N)
   for concrete workflows, but they should reuse the same core domain logic
   rather than becoming a parallel implementation.
 
-- **Transport flexibility.** The MCP server runs stdio for local dev/testing and streamable HTTP for remote access from Claude.ai / Gemini. Controlled by `MCP_TRANSPORT` env var.
+- **Transport flexibility.** The MCP server runs stdio for local dev/testing and streamable HTTP for remote access from Claude.ai / Gemini. Controlled by `server.transport` in `config.yaml`.
 
 - **Metadata via CrossRef, not LLM.** Document metadata is resolved from DOI → CrossRef API, with user-supplied BibTeX and plain title as fallbacks. LLM extraction was deliberately avoided to keep ingest deterministic and cheap.
 

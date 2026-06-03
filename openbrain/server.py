@@ -1,14 +1,15 @@
 """
 server.py — FastMCP server exposing Open Brain tools.
 
-Transport is controlled by the MCP_TRANSPORT environment variable:
-  stdio  — for local development and testing (default)
+Transport is controlled by config.yaml:
+  stdio  — for local development and testing
   http   — streamable HTTP for remote access via Claude.ai / Gemini
 """
 
 import os
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
+from openbrain import brain
 from openbrain.tools import capture, search, library, entities, briefing
 
 
@@ -53,8 +54,9 @@ briefing.register(mcp)
 
 
 def main():
-    transport = os.getenv("MCP_TRANSPORT", "stdio")
-    port = int(os.getenv("PORT", "8000"))
+    server_config = brain._cfg.get("server", {})
+    transport = server_config.get("transport", "stdio")
+    port = int(server_config.get("port", 8000))
     if transport == "http":
         mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
     else:

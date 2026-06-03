@@ -11,7 +11,7 @@ Offload expensive memory consolidation from real-time conversations. Raw thought
 Runs at ~2 AM on Computer A:
 
 1. Queries all thoughts created in the past 24 hours with `type` not in `('synthesis', 'archived')`.
-2. Batches them and sends to the configured maintenance model with a consolidation prompt:
+2. Batches them and sends to the configured extraction model with a consolidation prompt:
    - Deduplicate redundant entries
    - Resolve conflicting facts
    - Extract permanent rules or constraints
@@ -23,7 +23,7 @@ Runs at ~2 AM on Computer A:
 
 ## Compute routing
 
-The consolidation model is configured in `config.yaml` under a `maintenance`
+The consolidation model is configured in `config.yaml` under an `extraction`
 section. A local model routed through LiteLLM is the intended low-cost default,
 but the code reads the provider, model name, URL, schedule, lookback window, and
 batch size from config rather than assuming a specific model.
@@ -34,7 +34,7 @@ batch size from config rather than assuming a specific model.
 
 The job runs from the repository-level Docker Compose stack as the
 `maintenance` service. The container runs `scripts/openbrain-maintenance.py
---loop`, sleeps until `maintenance.run_at`, and runs once per day.
+--loop`, sleeps until `extraction.run_at`, and runs once per day.
 
 ---
 

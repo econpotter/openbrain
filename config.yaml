@@ -2,23 +2,32 @@
 # API keys and DATABASE_URL go in .env — not here.
 
 library_path: /mnt/data/openbrain/library
+backup_path: /mnt/data/openbrain/backup
 litellm_url: http://litellm:4000
+
+server:
+  # Transport: stdio | http
+  transport: http
+  port: 8000
+
+backup:
+  keep_days: 30
 
 embed:
   # Provider: voyage | openrouter | litellm
-  provider: voyage
-  model: voyage-large-2
+  provider: litellm
+  model: moon8-embeddings
   fallback:
     provider: openrouter
-    model: moon8-embeddings
+    model: openai/text-embedding-3-small
 
-maintenance:
+extraction:
   # Provider: openrouter | litellm
   provider: litellm
   model: moon8-fast
   fallback:
     provider: openrouter
-    model: google/gemini-2.5-flash
-  run_at: "02:00"
+    model: deepseek/deepseek-v4-flash
+  run_at: "18:00"
   lookback_hours: 24
   batch_size: 50

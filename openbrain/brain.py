@@ -43,8 +43,8 @@ def _load_config() -> dict:
 _cfg = _load_config()
 
 DATABASE_URL: str = os.environ["DATABASE_URL"]
-LIBRARY_PATH: Path = Path(os.getenv("LIBRARY_PATH", _cfg["library_path"])).expanduser()
-MAINTENANCE_CONFIG: dict = _cfg.get("maintenance", {})
+LIBRARY_PATH: Path = Path(_cfg["library_path"]).expanduser()
+EXTRACTION_CONFIG: dict = _cfg.get("extraction", {})
 
 _STOPWORDS = frozenset({
     "a", "an", "the", "and", "or", "but", "nor", "for", "yet", "so",
@@ -364,11 +364,11 @@ def _maintenance_prompt(thoughts: list[dict]) -> str:
     return "\n".join(lines)
 
 
-async def _complete_maintenance_with_config(prompt: str, config: dict) -> str:
+async def _complete_extraction_with_config(prompt: str, config: dict) -> str:
     provider = config.get("provider", "litellm")
     model = config.get("model")
     if not model:
-        raise ValueError("config.yaml: maintenance.model is required")
+        raise ValueError("config.yaml: extraction.model is required")
 
     if provider == "litellm":
         base_url = _litellm_url(config)
@@ -376,14 +376,14 @@ async def _complete_maintenance_with_config(prompt: str, config: dict) -> str:
         if not base_url:
             raise ValueError(
                 "config.yaml: litellm_url is required "
-                "when maintenance.provider is litellm"
+                "when extraction.provider is litellm"
             )
     elif provider == "openrouter":
         base_url = "https://openrouter.ai/api/v1"
         api_key_name = "OPENROUTER_API_KEY"
     else:
         raise ValueError(
-            f"Unknown maintenance.provider: {provider!r}. "
+            f"Unknown extraction.provider: {provider!r}. "
             "Expected one of: openrouter, litellm"
         )
 
@@ -407,14 +407,14 @@ async def _complete_maintenance_with_config(prompt: str, config: dict) -> str:
     return (result.choices[0].message.content or "").strip()
 
 
-async def complete_maintenance_prompt(prompt: str) -> str:
+async def complete_extraction_prompt(prompt: str) -> str:
     errors = []
-    for config in _configs_with_fallback(MAINTENANCE_CONFIG):
+    for config in _configs_with_fallback(EXTRACTION_CONFIG):
         try:
-            return await _complete_maintenance_with_config(prompt, config)
+            return await _complete_extraction_with_config(prompt, config)
         except Exception as exc:
             errors.append(f"{config['provider']}/{config['model']}: {exc}")
-    raise RuntimeError("All maintenance providers failed: " + "; ".join(errors))
+    raise RuntimeError("All extraction providers failed: " + "; ".join(errors))
 
 
 async def archive_thoughts(thought_ids: list[str], maintenance_run_id: str) -> None:
@@ -438,14 +438,14 @@ async def archive_thoughts(thought_ids: list[str], maintenance_run_id: str) -> N
 
 
 async def run_maintenance_once() -> dict:
-    since_hours = int(MAINTENANCE_CONFIG.get("lookback_hours", 24))
-    batch_size = int(MAINTENANCE_CONFIG.get("batch_size", 50))
+    since_hours = int(EXTRACTION_CONFIG.get("lookback_hours", 24))
+    batch_size = int(EXTRACTION_CONFIG.get("batch_size", 50))
     thoughts = await maintenance_thoughts(since_hours, batch_size)
     if not thoughts:
         return {"processed": 0, "syntheses": 0}
 
     prompt = _maintenance_prompt(thoughts)
-    synthesis = await complete_maintenance_prompt(prompt)
+    synthesis = await complete_extraction_prompt(prompt)
     if not synthesis:
         return {"processed": 0, "syntheses": 0}
 

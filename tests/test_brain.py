@@ -206,7 +206,7 @@ class ModelFallbackTests(unittest.IsolatedAsyncioTestCase):
                 "http://litellm:4000",
             )
 
-    async def test_maintenance_uses_fallback_when_primary_fails(self):
+    async def test_extraction_uses_fallback_when_primary_fails(self):
         config = {
             "provider": "litellm",
             "model": "primary",
@@ -221,10 +221,10 @@ class ModelFallbackTests(unittest.IsolatedAsyncioTestCase):
             return "fallback synthesis"
 
         with (
-            patch.object(brain, "MAINTENANCE_CONFIG", config),
-            patch.object(brain, "_complete_maintenance_with_config", _complete),
+            patch.object(brain, "EXTRACTION_CONFIG", config),
+            patch.object(brain, "_complete_extraction_with_config", _complete),
         ):
-            result = await brain.complete_maintenance_prompt("prompt")
+            result = await brain.complete_extraction_prompt("prompt")
 
         self.assertEqual(result, "fallback synthesis")
         self.assertEqual(calls, ["primary", "fallback"])
@@ -404,7 +404,7 @@ class MaintenanceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(brain, "maintenance_thoughts", AsyncMock(return_value=thoughts)),
             patch.object(
                 brain,
-                "complete_maintenance_prompt",
+                "complete_extraction_prompt",
                 AsyncMock(return_value="Remember Ada's estimator preference."),
             ),
             patch.object(brain, "store_thought", store_thought),

@@ -4,9 +4,10 @@
 # Usage:
 #   bash scripts/backup.sh
 #
-# Configured via .env:
-#   BACKUP_DIR        — where to write backups (default: ~/backups/openbrain)
-#   BACKUP_KEEP_DAYS  — how many days of backups to keep (default: 30)
+# Secrets are loaded from .env. Non-secret backup settings are read from
+# config.yaml:
+#   backup_path
+#   backup.keep_days
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -22,9 +23,35 @@ else
     exit 1
 fi
 
-BACKUP_DIR="${BACKUP_DIR:-$HOME/backups/openbrain}"
+PYTHON="$PROJECT_DIR/.venv/bin/python"
+if [ ! -x "$PYTHON" ]; then
+    PYTHON="python3"
+fi
+
+eval "$("$PYTHON" - "$PROJECT_DIR/config.yaml" <<'PY'
+import shlex
+import sys
+from pathlib import Path
+
+import yaml
+
+config_path = Path(sys.argv[1])
+with config_path.open() as f:
+    config = yaml.safe_load(f) or {}
+
+backup = config.get("backup", {})
+backup_path = config.get("backup_path", "~/backups/openbrain")
+library_path = config.get("library_path", "")
+
+backup_dir = Path(backup_path).expanduser()
+
+print(f"BACKUP_DIR={shlex.quote(str(backup_dir))}")
+print(f"KEEP_DAYS={shlex.quote(str(backup.get('keep_days', 30)))}")
+print(f"LIBRARY_PATH={shlex.quote(str(library_path))}")
+PY
+)"
+
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-KEEP_DAYS="${BACKUP_KEEP_DAYS:-30}"
 
 mkdir -p "$BACKUP_DIR"
 

@@ -11,13 +11,13 @@ model selection, and routing are configurable without code changes.
 
 | File | Contents |
 |------|----------|
-| `config.yaml` | Non-secret settings: embedding provider, model name, LiteLLM URL, library path |
-| `.env` | Secrets only: API keys, `DATABASE_URL`, transport settings |
+| `config.yaml` | Non-secret settings: embedding provider, model name, LiteLLM URL, library path, backup path, backup retention |
+| `.env` | Secrets only: API keys, `DATABASE_URL`, MCP access token |
 
 Adding a new model or switching providers should require only a change to `config.yaml`, not to code.
 
-Set `LIBRARY_PATH` to override the configured library path for a particular
-runtime environment, such as the Docker data volume.
+Set `library_path` in `config.yaml` for the runtime environment, such as the
+Docker data volume.
 
 ---
 
@@ -90,14 +90,14 @@ People and project embeddings are not just their structured fields. They incorpo
 
 ---
 
-## Maintenance model
+## Extraction model
 
-Nightly thought consolidation uses the `maintenance` section in `config.yaml`:
+Nightly thought consolidation uses the `extraction` section in `config.yaml`:
 
 ```yaml
 litellm_url: http://litellm:4000
 
-maintenance:
+extraction:
   provider: litellm
   model: <local-or-remote-chat-model>
   fallback:
@@ -108,9 +108,9 @@ maintenance:
   batch_size: 50
 ```
 
-The maintenance model does not need to match the embedding model. It reads raw
+The extraction model does not need to match the embedding model. It reads raw
 thoughts, writes synthesized memories as `type: synthesis`, and marks processed
 inputs with `metadata.archived = true`.
 
-An optional `maintenance.fallback` can be configured with the same provider
-keys. It is used if the primary maintenance chat model fails.
+An optional `extraction.fallback` can be configured with the same provider
+keys. It is used if the primary extraction chat model fails.

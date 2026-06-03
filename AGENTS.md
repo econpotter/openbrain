@@ -70,11 +70,11 @@ research and analysis workflows where it remains precise.
 ## Running the server
 
 ```bash
-# Local dev (stdio transport)
+# Local dev: set server.transport: stdio in config.yaml
 .venv/bin/python -m openbrain.server
 
-# Remote access (HTTP transport)
-MCP_TRANSPORT=http .venv/bin/python -m openbrain.server
+# Remote access: set server.transport: http in config.yaml
+.venv/bin/python -m openbrain.server
 
 # Ingest a document or directory
 .venv/bin/python -m openbrain.cli paper.pdf

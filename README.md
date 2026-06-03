@@ -53,9 +53,9 @@ The initial schema uses 1536-dimensional vectors to match `voyage-large-2`.
 Changing to a model with a different output dimension requires a schema change
 and re-embedding existing records.
 
-Nightly maintenance uses a separate chat model configured in `config.yaml`.
-That model consolidates recent raw thoughts into durable synthesis memories and
-does not need to match the embedding model.
+Nightly maintenance uses a separate extraction chat model configured in
+`config.yaml`. That model consolidates recent raw thoughts into durable
+synthesis memories and does not need to match the embedding model.
 
 ### Install PostgreSQL and pgvector
 
@@ -247,13 +247,14 @@ pip install -r requirements.txt
 
 # 2. Configure
 cp .env.example .env
-# edit .env with your DATABASE_URL and the key for your configured embed provider
+# edit .env with DATABASE_URL, provider API keys, and optional MCP_ACCESS_KEY
+# edit config.yaml for transport, model, library, and backup settings
 
 # 3. Install the core database schema
 bash scripts/setup_db.sh
 
 # 4. Start the MCP server
-MCP_TRANSPORT=http python -m openbrain.server
+python -m openbrain.server
 ```
 
 ## Changing the embedding provider
@@ -286,14 +287,14 @@ If the output dimension also changes, update the schema before re-embedding.
 ## Nightly maintenance
 
 The Compose stack includes an `openbrain-maintenance` container. It runs
-`scripts/openbrain-maintenance.py --loop`, sleeps until `maintenance.run_at`,
-then consolidates recent unarchived thoughts with the configured maintenance
+`scripts/openbrain-maintenance.py --loop`, sleeps until `extraction.run_at`,
+then consolidates recent unarchived thoughts with the configured extraction
 model.
 
 ```yaml
 litellm_url: http://litellm:4000
 
-maintenance:
+extraction:
   provider: litellm
   model: <local-or-remote-chat-model>
   run_at: "02:00"
@@ -318,7 +319,7 @@ library files automatically. Backups are kept for 30 days by default.
 bash scripts/backup.sh
 ```
 
-Backups are written to `BACKUP_DIR` (default `~/backups/openbrain`):
+Backups are written to `backup_path` in `config.yaml`:
 
 ```
 openbrain_20260324_020000.sql.gz   ← database dump
@@ -339,32 +340,34 @@ systemctl list-timers openbrain-backup.timer
 dropdb openbrain && createdb openbrain
 
 # Restore from a dump
-gunzip -c ~/backups/openbrain/openbrain_<timestamp>.sql.gz | psql $DATABASE_URL
+gunzip -c /mnt/data/openbrain/backup/openbrain_<timestamp>.sql.gz | psql $DATABASE_URL
 ```
 
 ### Restore library files
 
 ```bash
-tar -xzf ~/backups/openbrain/library_<timestamp>.tar.gz -C ~/
+tar -xzf /mnt/data/openbrain/backup/library_<timestamp>.tar.gz -C ~/
 ```
 
 ### Configure backup retention
 
-In `.env`:
+In `config.yaml`:
 
-```
-BACKUP_DIR=~/backups/openbrain
-BACKUP_KEEP_DAYS=30
+```yaml
+backup_path: ~/backups/openbrain
+backup:
+  keep_days: 30
 ```
 
 ## Development
 
 Run the server locally over stdio (no HTTP, useful for testing with the MCP
-inspector or a local Claude Code session):
+inspector or a local Claude Code session) by setting `server.transport: stdio`
+in `config.yaml`:
 
 ```bash
 source .venv/bin/activate
-python -m openbrain.server   # MCP_TRANSPORT defaults to stdio
+python -m openbrain.server
 ```
 
 Ingest a document:

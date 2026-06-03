@@ -71,7 +71,8 @@ Hooks make auto-capture more reliable than instructions alone.
 
 Use `docs/hooks/` as copyable source material:
 
-- `codex-hooks.template.json` — prompt template for Codex-like lifecycle hooks.
+- `codex-hooks.json` — prompt template for Codex-like lifecycle hooks.
+- `claude-code-hooks.json` — prompt template for Claude Code settings hooks.
 - `teardown-prompt.md` — final prompt for custom CLI or script harnesses.
 - `README.md` — install notes and caveats.
 

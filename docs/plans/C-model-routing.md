@@ -44,7 +44,7 @@ Route different memory operations to the cheapest capable tier:
 | Nightly synthesis | Local Llama / Mistral via Ollama | Zero token cost; can run slowly overnight |
 
 Configure model names per operation in `config.yaml` under their respective
-sections (`embed`, `maintenance`).
+sections (`embed`, `extraction`).
 
 ---
 
@@ -70,5 +70,5 @@ See `docs/design/nightly-cron.md` for full design. Implementation steps:
 - The nightly job never deletes thoughts — `thoughts` is append-only. Archiving sets `metadata.archived: true` only.
 - LiteLLM is one provider option. Direct Voyage AI and OpenRouter calls are
   equally valid. Local sentence-transformers embeddings are not implemented.
-- The maintenance synthesis model is also configured in `config.yaml`; the code
+- The extraction synthesis model is also configured in `config.yaml`; the code
   does not assume a specific local model name.

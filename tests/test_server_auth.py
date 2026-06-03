@@ -29,10 +29,18 @@ class _FastMCP:
         self.args = args
         self.kwargs = kwargs
         self.tools = {}
+        self.resources = {}
 
     def tool(self, fn):
         self.tools[fn.__name__] = fn
         return fn
+
+    def resource(self, uri, **kwargs):
+        def _decorator(fn):
+            self.resources[uri] = {"function": fn, "kwargs": kwargs}
+            return fn
+
+        return _decorator
 
     def run(self, *args, **kwargs):
         return None
@@ -102,6 +110,18 @@ class ServerAuthTests(unittest.TestCase):
         from openbrain import server
 
         self.assertIsNone(server.mcp.kwargs["auth"])
+
+    def test_server_registers_guidance_resources_and_new_tools(self):
+        os.environ.pop("MCP_ACCESS_KEY", None)
+
+        from openbrain import server
+
+        self.assertIn("openbrain://tool-guide", server.mcp.resources)
+        self.assertIn("openbrain://schema-summary", server.mcp.resources)
+        self.assertIn("openbrain://capture-policy", server.mcp.resources)
+        self.assertIn("get_project", server.mcp.tools)
+        self.assertIn("list_follow_ups", server.mcp.tools)
+        self.assertIn("run_memory_maintenance", server.mcp.tools)
 
 
 if __name__ == "__main__":

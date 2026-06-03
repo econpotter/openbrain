@@ -465,6 +465,42 @@ async def run_maintenance_once() -> dict:
     return {"processed": len(thoughts), "syntheses": 1}
 
 
+async def preview_maintenance_once() -> dict:
+    since_hours = int(EXTRACTION_CONFIG.get("lookback_hours", 24))
+    batch_size = int(EXTRACTION_CONFIG.get("batch_size", 50))
+    thoughts = await maintenance_thoughts(since_hours, batch_size)
+    if not thoughts:
+        return {"processed": 0, "synthesis": "", "thought_ids": []}
+
+    prompt = _maintenance_prompt(thoughts)
+    synthesis = await complete_extraction_prompt(prompt)
+    return {
+        "processed": len(thoughts),
+        "synthesis": synthesis,
+        "thought_ids": [str(thought["id"]) for thought in thoughts],
+    }
+
+
+async def apply_maintenance_synthesis(thought_ids: list[str], synthesis: str) -> dict:
+    if not thought_ids or not synthesis.strip():
+        return {"processed": 0, "syntheses": 0}
+
+    run_key = "\n".join([synthesis.strip(), *sorted(thought_ids)])
+    run_id = hashlib.sha256(run_key.encode("utf-8")).hexdigest()[:16]
+    await store_thought(
+        synthesis.strip(),
+        {
+            "type": "synthesis",
+            "source": "openbrain-maintenance",
+            "source_type": "maintenance",
+            "thought_ids": thought_ids,
+            "maintenance_run_id": run_id,
+        },
+    )
+    await archive_thoughts(thought_ids, run_id)
+    return {"processed": len(thought_ids), "syntheses": 1}
+
+
 async def _entity_text(table: str, row: dict) -> str:
     if table == "people":
         parts = [row.get("name") or "", row.get("affiliation") or "",
@@ -648,6 +684,27 @@ async def find_project_by_name(name: str) -> list[dict]:
             f"%{name}%",
         )
     return [dict(r) for r in rows]
+
+
+async def get_project_profile(name: str) -> dict | None:
+    matches = await find_project_by_name(name)
+    if not matches:
+        return None
+    if len(matches) > 1:
+        return {"multiple": [r["name"] for r in matches]}
+    project = dict(matches[0])
+
+    thoughts = await thoughts_mentioning(project["name"], "project", limit=50)
+    cooc = _extract_cooccurrences(thoughts, exclude=project["name"])
+    docs = await find_library_records(project["name"])
+
+    return {
+        "project": project,
+        "thoughts": thoughts,
+        "cooccurring_people": cooc["people"],
+        "cooccurring_projects": cooc["projects"],
+        "library": docs,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -943,7 +1000,7 @@ async def find_library_records(query: str) -> list[dict]:
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT id, title, authors, year, source, doc_type, status, filepath, doi
+            SELECT id, title, authors, year, source, doc_type, status, filepath, doi, abstract
             FROM library
             WHERE title ILIKE $1
                OR filepath ILIKE $1
@@ -954,6 +1011,15 @@ async def find_library_records(query: str) -> list[dict]:
             f"%{query}%",
         )
     return [dict(r) for r in rows]
+
+
+async def get_library_record(query: str) -> dict | None:
+    matches = await find_library_records(query)
+    if not matches:
+        return None
+    if len(matches) > 1:
+        return {"multiple": [r["title"] for r in matches]}
+    return matches[0]
 
 
 async def update_library_record(record_id: str, updates: dict) -> dict | None:

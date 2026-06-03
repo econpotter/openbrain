@@ -29,6 +29,9 @@ sys.modules.setdefault("bibtexparser", bibtexparser)
 os.environ.setdefault("DATABASE_URL", "postgresql://test/openbrain")
 
 from openbrain import brain  # noqa: E402
+from openbrain.tools import capture as capture_tools  # noqa: E402
+from openbrain.tools import library as library_tools  # noqa: E402
+from openbrain.tools import maintenance as maintenance_tools  # noqa: E402
 from openbrain.tools import search as search_tools  # noqa: E402
 
 
@@ -124,10 +127,18 @@ class _BriefingConnection:
 class _Mcp:
     def __init__(self):
         self.tools = {}
+        self.resources = {}
 
     def tool(self, function):
         self.tools[function.__name__] = function
         return function
+
+    def resource(self, uri, **kwargs):
+        def _decorator(function):
+            self.resources[uri] = {"function": function, "kwargs": kwargs}
+            return function
+
+        return _decorator
 
 
 class StoreThoughtTests(unittest.IsolatedAsyncioTestCase):
@@ -172,6 +183,71 @@ class StoreThoughtTests(unittest.IsolatedAsyncioTestCase):
         )
 
         refresh.assert_awaited_once_with(["Ada", "Grace"], [])
+
+    async def test_capture_tool_exposes_structured_metadata(self):
+        mcp = _Mcp()
+        capture_tools.register(mcp)
+        store_thought = AsyncMock(return_value="thought-1")
+        with patch.object(brain, "store_thought", store_thought):
+            result = await mcp.tools["capture_thought"](
+                "Decision made.",
+                importance=5,
+                sensitivity_tier="personal",
+                quality_score=90,
+                action_items=["Follow up"],
+            )
+
+        self.assertEqual(result, "Stored thought thought-1")
+        _, metadata = store_thought.await_args.args
+        self.assertEqual(metadata["importance"], 5)
+        self.assertEqual(metadata["sensitivity_tier"], "personal")
+        self.assertEqual(metadata["quality_score"], 90)
+        self.assertEqual(metadata["action_items"], ["Follow up"])
+
+    async def test_task_shaped_capture_tools_set_metadata(self):
+        mcp = _Mcp()
+        capture_tools.register(mcp)
+        store_thought = AsyncMock(return_value="thought-1")
+        with patch.object(brain, "store_thought", store_thought):
+            await mcp.tools["capture_decision"](
+                "Use dry-run maintenance by default.",
+                rationale="Avoid accidental archival.",
+                projects=["openbrain"],
+            )
+
+        content, metadata = store_thought.await_args.args
+        self.assertIn("Rationale:", content)
+        self.assertIn("decision", metadata["tags"])
+        self.assertEqual(metadata["projects"], ["openbrain"])
+
+    async def test_project_update_includes_project_in_content_and_validates_status(self):
+        mcp = _Mcp()
+        capture_tools.register(mcp)
+        store_thought = AsyncMock(return_value="thought-1")
+        find_project = AsyncMock(return_value=[])
+        with (
+            patch.object(brain, "store_thought", store_thought),
+            patch.object(brain, "find_project_by_name", find_project),
+        ):
+            result = await mcp.tools["capture_project_update"](
+                "openbrain",
+                "Ready for review.",
+                status="active",
+            )
+
+        self.assertEqual(result, "Stored project update thought-1")
+        content, metadata = store_thought.await_args.args
+        self.assertEqual(content, "Project update for openbrain [active]: Ready for review.")
+        self.assertEqual(metadata["projects"], ["openbrain"])
+
+        store_thought.reset_mock()
+        result = await mcp.tools["capture_project_update"](
+            "openbrain",
+            "Ready for review.",
+            status="unknown",
+        )
+        self.assertIn("Invalid status", result)
+        store_thought.assert_not_awaited()
 
 
 class ModelFallbackTests(unittest.IsolatedAsyncioTestCase):
@@ -306,6 +382,39 @@ class LibrarySearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("LIMIT $5", query)
         self.assertEqual(args, ([0.1, 0.2], 0.6, 2020, "paper", 4))
 
+    async def test_update_library_status_alias_uses_library_update(self):
+        mcp = _Mcp()
+        library_tools.register(mcp)
+        matches = [{"id": "library-1", "title": "Paper"}]
+        updated = {"title": "Paper", "status": "read"}
+        with (
+            patch.object(brain, "find_library_records", AsyncMock(return_value=matches)),
+            patch.object(brain, "update_library_record", AsyncMock(return_value=updated)),
+        ):
+            result = await mcp.tools["update_library_status"]("Paper", "read")
+
+        self.assertEqual(result, "Updated: Paper → read")
+
+    async def test_get_library_record_formats_metadata(self):
+        mcp = _Mcp()
+        library_tools.register(mcp)
+        record = {
+            "title": "Paper",
+            "authors": ["Ada"],
+            "year": 2026,
+            "source": "journal",
+            "doi": "10.123/test",
+            "doc_type": "paper",
+            "status": "read",
+            "filepath": "/tmp/paper.pdf",
+            "abstract": "Abstract text.",
+        }
+        with patch.object(brain, "get_library_record", AsyncMock(return_value=record)):
+            result = await mcp.tools["get_library_record"]("Paper")
+
+        self.assertIn("Authors: Ada", result)
+        self.assertIn("Path: /tmp/paper.pdf", result)
+
 
 class ThoughtConnectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_get_thought_connections_excludes_restricted_by_default(self):
@@ -421,6 +530,79 @@ class MaintenanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(metadata["thought_ids"], ["thought-1"])
         archive_thoughts.assert_awaited_once_with(
             ["thought-1"], metadata["maintenance_run_id"]
+        )
+
+    async def test_preview_maintenance_returns_synthesis_without_archiving(self):
+        thoughts = [{"id": "thought-1", "content": "A", "metadata": {}}]
+        with (
+            patch.object(brain, "maintenance_thoughts", AsyncMock(return_value=thoughts)),
+            patch.object(brain, "complete_extraction_prompt", AsyncMock(return_value="Synthesis.")),
+        ):
+            result = await brain.preview_maintenance_once()
+
+        self.assertEqual(result["processed"], 1)
+        self.assertEqual(result["synthesis"], "Synthesis.")
+        self.assertEqual(result["thought_ids"], ["thought-1"])
+
+    async def test_apply_maintenance_uses_approved_synthesis_and_ids(self):
+        store_thought = AsyncMock(return_value="synthesis-1")
+        archive_thoughts = AsyncMock()
+        with (
+            patch.object(brain, "store_thought", store_thought),
+            patch.object(brain, "archive_thoughts", archive_thoughts),
+        ):
+            result = await brain.apply_maintenance_synthesis(
+                ["thought-1"],
+                "Approved synthesis.",
+            )
+
+        self.assertEqual(result, {"processed": 1, "syntheses": 1})
+        content, metadata = store_thought.await_args.args
+        self.assertEqual(content, "Approved synthesis.")
+        self.assertEqual(metadata["thought_ids"], ["thought-1"])
+        archive_thoughts.assert_awaited_once_with(
+            ["thought-1"], metadata["maintenance_run_id"]
+        )
+
+    async def test_memory_maintenance_tool_defaults_to_dry_run(self):
+        mcp = _Mcp()
+        maintenance_tools.register(mcp)
+        preview = {
+            "processed": 1,
+            "synthesis": "Synthesis.",
+            "thought_ids": ["thought-1"],
+        }
+        with patch.object(brain, "preview_maintenance_once", AsyncMock(return_value=preview)):
+            result = await mcp.tools["run_memory_maintenance"]()
+
+        self.assertIn("DRY RUN", result)
+        self.assertIn("thought-1", result)
+
+    async def test_memory_maintenance_apply_requires_approved_preview(self):
+        mcp = _Mcp()
+        maintenance_tools.register(mcp)
+        apply_maintenance = AsyncMock()
+        with patch.object(brain, "apply_maintenance_synthesis", apply_maintenance):
+            result = await mcp.tools["run_memory_maintenance"](dry_run=False)
+
+        self.assertIn("Run dry_run=True first", result)
+        apply_maintenance.assert_not_awaited()
+
+    async def test_memory_maintenance_apply_uses_approved_preview(self):
+        mcp = _Mcp()
+        maintenance_tools.register(mcp)
+        apply_maintenance = AsyncMock(return_value={"processed": 1, "syntheses": 1})
+        with patch.object(brain, "apply_maintenance_synthesis", apply_maintenance):
+            result = await mcp.tools["run_memory_maintenance"](
+                dry_run=False,
+                approved_synthesis="Approved synthesis.",
+                thought_ids=["thought-1"],
+            )
+
+        self.assertIn("Processed 1 thought", result)
+        apply_maintenance.assert_awaited_once_with(
+            ["thought-1"],
+            "Approved synthesis.",
         )
 
     async def test_archive_thoughts_sets_archived_metadata(self):

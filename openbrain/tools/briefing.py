@@ -14,6 +14,9 @@ def register(mcp):
         Return a briefing covering active projects, recent thoughts, people, and
         ingested documents for a given time window.
 
+        Use this when the user asks what's on their plate, what happened today
+        or this week, or what follow-ups are due.
+
         Always call gcal_list_events for the same date range alongside this tool
         to give a complete picture of what's on the user's plate.
 
@@ -98,6 +101,11 @@ def register(mcp):
     ) -> str:
         """
         Unified search across everything — thoughts, library, people, projects.
+
+        Use this as the default retrieval tool for "what do I know about X?",
+        "find context on X", and other broad memory questions. Use narrower
+        tools only when the user explicitly asks for thoughts, documents,
+        people, or projects.
 
         Uses hybrid search: vector similarity catches semantic relationships,
         full-text search catches exact names and technical terms. Library results

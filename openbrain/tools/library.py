@@ -1,6 +1,6 @@
 """
 tools/library.py — ingest_document, ingest_directory, search_library,
-                   update_library, update_status tools.
+                   update_library, update_library_status tools.
 """
 
 from pathlib import Path
@@ -20,6 +20,10 @@ def register(mcp):
     ) -> str:
         """
         Ingest a single document into the library.
+
+        Use this for files already present on the MCP server filesystem. For a
+        remote client file, first make the file available on the server, then
+        pass its absolute path.
 
         Extracts text, looks up metadata via DOI → CrossRef, copies the file to
         LIBRARY_PATH with a standardized filename, chunks and embeds the content.
@@ -115,6 +119,9 @@ def register(mcp):
         """
         Semantic search over the document library.
 
+        Use this when the user asks about papers, reports, documentation, or
+        document text. Use get_library_record for metadata about a known record.
+
         Returns ranked results with title, authors, year, and the matching excerpt.
 
         Args:
@@ -144,6 +151,44 @@ def register(mcp):
         return "\n\n".join(lines)
 
     @mcp.tool
+    async def get_library_record(query: str) -> str:
+        """
+        Get metadata for one library record without searching document chunks.
+
+        Use this when the user asks for a document's filepath, citation metadata,
+        DOI, status, or catalog details.
+
+        Args:
+            query: Title fragment, author name, filename slug, filepath, or DOI.
+        """
+        record = await brain.get_library_record(query)
+        if record is None:
+            return f"No library record found matching '{query}'."
+        if "multiple" in record:
+            return f"Multiple matches: {', '.join(record['multiple'])}. Please be more specific."
+
+        lines = [f"## {record['title']}"]
+        authors = record["authors"] or []
+        if authors:
+            lines.append("Authors: " + ", ".join(authors))
+        if record["year"]:
+            lines.append(f"Year: {record['year']}")
+        if record["source"]:
+            lines.append(f"Source: {record['source']}")
+        if record["doi"]:
+            lines.append(f"DOI: {record['doi']}")
+        if record["doc_type"]:
+            lines.append(f"Type: {record['doc_type']}")
+        if record["status"]:
+            lines.append(f"Status: {record['status']}")
+        if record["filepath"]:
+            lines.append(f"Path: {record['filepath']}")
+        if record.get("abstract"):
+            abstract = record["abstract"][:500].replace("\n", " ")
+            lines.append(f"Abstract: {abstract}")
+        return "\n".join(lines)
+
+    @mcp.tool
     async def update_library(
         query: str,
         bibtex: str | None = None,
@@ -158,6 +203,9 @@ def register(mcp):
     ) -> str:
         """
         Update fields on a library record. Looks up by title, author, filepath, or DOI.
+
+        Use this to correct catalog metadata after ingestion. Do not re-ingest a
+        document just to fix title, authors, DOI, source, type, or status.
 
         Supply bibtex to populate multiple fields at once from a BibTeX entry.
         Any explicitly provided fields (title, authors, etc.) override the BibTeX values.
@@ -230,9 +278,12 @@ def register(mcp):
         return f"Updated: {updated['title']} [{updated['doc_type']}] — {updated['status']}"
 
     @mcp.tool
-    async def update_status(query: str, status: str) -> str:
+    async def update_library_status(query: str, status: str) -> str:
         """
         Update the status of a library record.
+
+        Use this when the user says a paper/document is now reading, read,
+        archived, or should return to ingested.
 
         Args:
             query:  Title fragment, author name, filename slug, or DOI.
@@ -249,3 +300,17 @@ def register(mcp):
         if not updated:
             return "Update failed."
         return f"Updated: {updated['title']} → {updated['status']}"
+
+    @mcp.tool
+    async def update_status(query: str, status: str) -> str:
+        """
+        Compatibility alias for update_library_status.
+
+        Prefer update_library_status because the clearer name helps models
+        choose the right tool when multiple MCP servers are available.
+
+        Args:
+            query:  Title fragment, author name, filename slug, or DOI.
+            status: ingested | reading | read | archived
+        """
+        return await update_library_status(query, status)

@@ -30,8 +30,9 @@ The core abstraction is the **thought** — an append-only record of anything wo
 | Component | Responsibility | Key files |
 |-----------|---------------|-----------|
 | **brain.py** | Core logic: embed, store, retrieve. All database access. Async, uses asyncpg. | `openbrain/brain.py` |
-| **MCP server** | FastMCP server exposing tools to Claude/Gemini via stdio or HTTP. | `openbrain/server.py` |
-| **tools/** | One file per tool group; each exports a `register(mcp)` function. | `openbrain/tools/capture.py`, `openbrain/tools/search.py`, `openbrain/tools/library.py`, `openbrain/tools/entities.py`, `openbrain/tools/briefing.py` |
+| **MCP server** | FastMCP server exposing tools and read-only resources to Claude/Gemini via stdio or HTTP. | `openbrain/server.py` |
+| **tools/** | One file per tool group; each exports a `register(mcp)` function. | `openbrain/tools/capture.py`, `openbrain/tools/search.py`, `openbrain/tools/library.py`, `openbrain/tools/entities.py`, `openbrain/tools/briefing.py`, `openbrain/tools/maintenance.py` |
+| **resources.py** | Read-only MCP guidance resources for tool choice, schema context, and capture policy. | `openbrain/resources.py` |
 | **ingest CLI** | Standalone CLI for ingesting documents from the local filesystem. | `openbrain/cli.py` |
 | **schemas/core/** | Clean SQL baseline for initializing a new openbrain database. | `schemas/core/` |
 | **Postgres + pgvector** | Storage: structured rows + vector indexes for semantic search. | (external) |
@@ -41,6 +42,17 @@ The core abstraction is the **thought** — an append-only record of anything wo
 ---
 
 ## Data Flow
+
+### MCP resources
+
+```
+AI client
+  → reads openbrain://tool-guide, openbrain://schema-summary, or openbrain://capture-policy
+  → uses the guidance to choose a tool
+```
+
+Resources are read-only context. Mutation, search, ingest, and maintenance
+actions stay behind MCP tools.
 
 ### Thought capture
 

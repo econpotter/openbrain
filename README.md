@@ -473,6 +473,7 @@ curl -s https://potter.nicholas-fuji.nord:8443/mcp/
 ```
 openbrain/
   brain.py           Core logic: embed, store, retrieve
+  resources.py       Read-only MCP guidance resources
   server.py          FastMCP server entry point
   cli.py             Standalone CLI for ingesting documents
 schemas/core/        Clean install-time SQL baseline, applied in numeric order

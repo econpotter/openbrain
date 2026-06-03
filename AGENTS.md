@@ -22,6 +22,7 @@ openbrain/
 │   ├── brain.py       #   Core logic — embed, store, retrieve. All DB access lives here.
 │   ├── server.py      #   FastMCP server entry point.
 │   ├── cli.py         #   Ingest CLI entry point.
+│   ├── resources.py   #   Read-only MCP guidance resources.
 │   └── tools/         #   One file per tool group, each exports register(mcp).
 │       ├── capture.py #     capture_thought
 │       ├── search.py  #     search_thoughts, browse_recent, get_stats
@@ -30,7 +31,8 @@ openbrain/
 │       ├── entities.py#     add_person, get_person, list_people, update_person,
 │       │              #     add_project, list_projects, update_project, refresh_embeddings,
 │       │              #     search_people, search_projects, search_by_entity, add_note
-│       └── briefing.py#     get_briefing, search_brain
+│       ├── briefing.py#     get_briefing, search_brain
+│       └── maintenance.py
 ├── schemas/
 │   ├── core/          # Clean install-time SQL baseline, applied in numeric order.
 │   └── optional/      # Additional capabilities evaluated after the core baseline.
@@ -50,6 +52,7 @@ openbrain/
 - **Treat `schemas/core/` as the pre-alpha install-time baseline.** Once openbrain contains real data, introduce a separate migration mechanism for later schema changes.
 - **`thoughts` is append-only.** Never `DELETE` or `UPDATE` thought content. Corrections go in as new thoughts.
 - **One `register(mcp)` per tool file.** Each file in `tools/` exports exactly one function that registers its tools with the FastMCP instance.
+- **MCP resources are read-only guidance surfaces.** Keep mutation, search, ingest, and maintenance actions behind tools.
 - **No hardcoded model providers or names.** Read model config from `config.yaml`. See `docs/design/model-config.md`.
 
 ---

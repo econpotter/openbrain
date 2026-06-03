@@ -15,6 +15,10 @@ def register(mcp):
         """
         Semantic search over stored thoughts and memories.
 
+        Use this for narrow searches over captured memory only. For broad
+        questions across memory, documents, people, and projects, use
+        search_brain instead.
+
         Returns the most similar stored thoughts, ranked by cosine similarity.
 
         Args:
@@ -43,6 +47,9 @@ def register(mcp):
         """
         Retrieve thoughts from the past N hours, newest first.
 
+        Prefer browse_recent_thoughts when choosing by tool name. This alias is
+        kept for compatibility.
+
         Args:
             hours: How many hours back to look. Default 24.
             limit: Maximum number of thoughts to return. Default 20.
@@ -56,6 +63,23 @@ def register(mcp):
             snippet = r["content"][:300].replace("\n", " ")
             lines.append(f"[{ts}] {snippet}")
         return "\n\n".join(lines)
+
+    @mcp.tool
+    async def browse_recent_thoughts(
+        hours: int = 24,
+        limit: int = 20,
+    ) -> str:
+        """
+        Retrieve recent thoughts and memory records, newest first.
+
+        Use this when the user asks what was recently captured, what happened
+        in openbrain recently, or asks to inspect recent memory writes.
+
+        Args:
+            hours: How many hours back to look. Default 24.
+            limit: Maximum number of thoughts to return. Default 20.
+        """
+        return await browse_recent(hours, limit)
 
     @mcp.tool
     async def get_thought_connections(
@@ -98,6 +122,9 @@ def register(mcp):
     async def get_stats() -> str:
         """
         Return row counts and grouped activity statistics for the brain database.
+
+        Use this for health checks and high-level database inventory, not for
+        answering substantive questions about a topic.
         """
         stats = await brain.table_stats()
         lines = [

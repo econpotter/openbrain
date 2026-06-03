@@ -87,6 +87,57 @@ def register(mcp):
         return "\n".join(lines)
 
     @mcp.tool
+    async def get_project(name: str) -> str:
+        """
+        Get a full profile for a project: its record, related thoughts,
+        co-occurring people/projects, and matching library records.
+
+        Use this when the user asks about a known project, its current context,
+        or recent decisions tied to that project.
+
+        Args:
+            name: Project name (partial match).
+        """
+        result = await brain.get_project_profile(name)
+        if result is None:
+            return f"No project found matching '{name}'."
+        if "multiple" in result:
+            return f"Multiple matches: {', '.join(result['multiple'])}. Please be more specific."
+
+        p = result["project"]
+        lines = [f"## {p['name']} [{p['status']}]"]
+        if p["description"]:
+            lines.append(f"Description: {p['description']}")
+        if p["start_date"]:
+            lines.append(f"Start date: {p['start_date']}")
+
+        thoughts = result["thoughts"]
+        if thoughts:
+            lines.append(f"\n### Thoughts & notes ({len(thoughts)}):")
+            for t in thoughts:
+                ts = t["created_at"].strftime("%Y-%m-%d")
+                snippet = t["content"][:200].replace("\n", " ")
+                lines.append(f"  [{ts}] {snippet}")
+
+        if result["cooccurring_people"]:
+            lines.append("\n### Co-occurring people:")
+            for person, count in result["cooccurring_people"]:
+                lines.append(f"  {person} ({count})")
+
+        if result["cooccurring_projects"]:
+            lines.append("\n### Co-occurring projects:")
+            for project, count in result["cooccurring_projects"]:
+                lines.append(f"  {project} ({count})")
+
+        if result["library"]:
+            lines.append("\n### Library records:")
+            for doc in result["library"][:10]:
+                year = f" ({doc['year']})" if doc["year"] else ""
+                lines.append(f"  {doc['title']}{year} [{doc['status']}]")
+
+        return "\n".join(lines)
+
+    @mcp.tool
     async def search_by_entity(
         name: str,
         entity_type: str = "any",
@@ -242,6 +293,30 @@ def register(mcp):
         return "\n".join(lines)
 
     @mcp.tool
+    async def list_follow_ups(within_days: int = 7) -> str:
+        """
+        List people with follow-ups due soon.
+
+        Use this when the user asks who needs attention, what follow-ups are
+        due, or what contacts are overdue.
+
+        Args:
+            within_days: Include follow-ups due within this many days. Default 7.
+        """
+        rows = await brain.people_with_follow_ups(within_days)
+        if not rows:
+            return f"No follow-ups due within {within_days} days."
+        lines = []
+        for r in rows:
+            line = f"{r['follow_up_date']} — {r['name']}"
+            if r["affiliation"]:
+                line += f" | {r['affiliation']}"
+            if r["notes"]:
+                line += f" — {r['notes']}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    @mcp.tool
     async def update_person(
         name: str,
         new_name: str | None = None,
@@ -252,6 +327,10 @@ def register(mcp):
     ) -> str:
         """
         Update fields on a person record. Looks up the person by their current name.
+
+        Use this to correct or maintain the person record itself. For ordinary
+        dated notes about a person, use add_note instead because update_person
+        overwrites the notes field.
 
         Args:
             name:           Current name of the person to update.
@@ -317,6 +396,9 @@ def register(mcp):
     ) -> str:
         """
         Update fields on a project record. Looks up the project by its current name.
+
+        Use this to rename a project, change its status, or update the stable
+        project description. For a dated project event, use capture_project_update.
 
         Args:
             name:         Current name of the project to update.

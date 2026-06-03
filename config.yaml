@@ -13,6 +13,12 @@ server:
 backup:
   keep_days: 30
 
+ingest:
+  staging_path: /tmp/openbrain-ingest
+  # Optional SCP host or alias shown by prepare_document_ingest.
+  # If omitted, openbrain uses the server hostname.
+  staging_host:
+
 embed:
   # Provider: voyage | openrouter | litellm
   provider: litellm

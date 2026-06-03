@@ -22,6 +22,11 @@ Default capture:
 Maintenance:
 - Use run_memory_maintenance(dry_run=True) before any write/archival action.
 - Use dry_run=False only with the exact approved synthesis and source thought IDs.
+
+Remote document ingest:
+- Use prepare_document_ingest(filename) for PDFs/text files on a remote client.
+- After the file is copied to the returned destination, call ingest_staged_document.
+- Do not store PDF bytes in Postgres; the pipeline copies files to LIBRARY_PATH.
 """.strip()
 
 

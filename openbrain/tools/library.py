@@ -4,12 +4,33 @@ tools/library.py — ingest_document, ingest_directory, search_library,
 """
 
 from pathlib import Path
-import tempfile
 
 from openbrain import brain
 
 
 def register(mcp):
+    @mcp.tool
+    async def prepare_document_ingest(filename: str) -> str:
+        """
+        Reserve a safe staging path for a remote PDF or text file before ingest.
+
+        Use this first when the file is on a remote client machine. Ask the user
+        or client to copy the file to the returned destination, then call
+        ingest_staged_document with the staged filepath.
+
+        Args:
+            filename: Original filename, used only to preserve a readable suffix.
+        """
+        result = brain.prepare_ingest_staging_path(filename)
+        return (
+            "Upload the file to:\n"
+            f"{result['filepath']}\n\n"
+            "From the client machine, run:\n"
+            f"scp /path/to/{filename} {result['scp_destination']}\n\n"
+            "Then call:\n"
+            f"ingest_staged_document(filepath=\"{result['filepath']}\")"
+        )
+
     @mcp.tool
     async def ingest_document(
         filepath: str,
@@ -21,9 +42,9 @@ def register(mcp):
         """
         Ingest a single document into the library.
 
-        Use this for files already present on the MCP server filesystem. For a
-        remote client file, first make the file available on the server, then
-        pass its absolute path.
+        Use this for files already present on the MCP server filesystem. For
+        remote PDFs or text files, use prepare_document_ingest first, then
+        ingest_staged_document.
 
         Extracts text, looks up metadata via DOI → CrossRef, copies the file to
         LIBRARY_PATH with a standardized filename, chunks and embeds the content.
@@ -46,7 +67,7 @@ def register(mcp):
         except ValueError as e:
             return str(e)
         finally:
-            if str(path).startswith(tempfile.gettempdir()):
+            if brain.is_ingest_staged_path(path) and path.is_file():
                 path.unlink(missing_ok=True)
         msg = (
             f"Ingested: {result['title']}\n"
@@ -60,6 +81,36 @@ def register(mcp):
                 f"update_library(query=\"{result['title']}\", bibtex=...) to fix it."
             )
         return msg
+
+    @mcp.tool
+    async def ingest_staged_document(
+        filepath: str,
+        doc_type: str = "paper",
+        force: bool = False,
+        bibtex: str | None = None,
+        title: str | None = None,
+    ) -> str:
+        """
+        Ingest a document previously copied to the openbrain staging directory.
+
+        Use this after prepare_document_ingest and SCP/upload have placed the
+        file at the returned staged filepath. The ingest pipeline copies the
+        PDF/text file into LIBRARY_PATH and removes the staged copy.
+
+        Args:
+            filepath: Staged path returned by prepare_document_ingest.
+            doc_type: Type label — paper | report | documentation | data_dictionary | note | other.
+            force: Re-ingest even if the file has already been ingested.
+            bibtex: BibTeX entry to use when automatic metadata lookup fails.
+            title: Plain title to use when no DOI/BibTeX metadata is available.
+        """
+        path = Path(filepath).expanduser().resolve()
+        if not brain.is_ingest_staged_path(path):
+            return (
+                f"Not an openbrain staged file: {filepath}. "
+                "Call prepare_document_ingest first and copy the file to that path."
+            )
+        return await ingest_document(str(path), doc_type, force, bibtex, title)
 
     @mcp.tool
     async def ingest_directory(

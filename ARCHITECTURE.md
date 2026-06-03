@@ -68,8 +68,9 @@ AI (Claude/Gemini)
 
 ```
 Remote client
-  → scp file to MCP server host  (/tmp/file-<random>)
-  → ingest_document(filepath)
+  → prepare_document_ingest(filename)
+  → scp file to returned MCP server staging path
+  → ingest_staged_document(filepath)
       → SHA256 hash → dedup check
       → extract text (pdfplumber / plain read)
       → extract DOI → CrossRef lookup (title, authors, year, BibTeX)
@@ -80,6 +81,10 @@ Remote client
       → embed each chunk → INSERT INTO chunks
       → store_thought("Ingested: ...")
 ```
+
+The staged copy is temporary. PDF bytes are stored in `LIBRARY_PATH`, not in
+Postgres. Postgres stores catalog metadata, file hashes/paths, and searchable
+text chunks.
 
 ### Semantic search
 

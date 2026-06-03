@@ -307,6 +307,74 @@ class ModelFallbackTests(unittest.IsolatedAsyncioTestCase):
 
 
 class IngestPipelineTests(unittest.IsolatedAsyncioTestCase):
+    async def test_prepare_ingest_staging_path_uses_configured_directory(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            with (
+                patch.object(brain, "INGEST_STAGING_PATH", Path(tempdir)),
+                patch.object(brain, "INGEST_CONFIG", {"staging_host": "rhyme"}),
+            ):
+                result = brain.prepare_ingest_staging_path("A Trial Paper.pdf")
+
+            staged_path = Path(result["filepath"])
+            self.assertEqual(staged_path.parent, Path(tempdir))
+            self.assertTrue(staged_path.name.startswith("A-Trial-Paper-"))
+            self.assertEqual(staged_path.suffix, ".pdf")
+            self.assertEqual(result["host"], "rhyme")
+            self.assertEqual(result["scp_destination"], f"rhyme:{staged_path}")
+
+    async def test_is_ingest_staged_path_requires_staging_directory(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            staging = Path(tempdir) / "staging"
+            outside = Path(tempdir) / "outside.pdf"
+            inside = staging / "paper.pdf"
+            with patch.object(brain, "INGEST_STAGING_PATH", staging):
+                self.assertTrue(brain.is_ingest_staged_path(inside))
+                self.assertFalse(brain.is_ingest_staged_path(outside))
+
+    async def test_prepare_document_ingest_tool_formats_scp_instruction(self):
+        mcp = _Mcp()
+        library_tools.register(mcp)
+        prepared = {
+            "filepath": "/tmp/openbrain-ingest/paper-a1b2c3d4.pdf",
+            "host": "rhyme",
+            "scp_destination": "rhyme:/tmp/openbrain-ingest/paper-a1b2c3d4.pdf",
+        }
+        with patch.object(brain, "prepare_ingest_staging_path", return_value=prepared):
+            result = await mcp.tools["prepare_document_ingest"]("paper.pdf")
+
+        self.assertIn("scp /path/to/paper.pdf rhyme:/tmp/openbrain-ingest", result)
+        self.assertIn("ingest_staged_document", result)
+
+    async def test_ingest_staged_document_rejects_non_staged_path(self):
+        mcp = _Mcp()
+        library_tools.register(mcp)
+        with patch.object(brain, "is_ingest_staged_path", return_value=False):
+            result = await mcp.tools["ingest_staged_document"]("/tmp/paper.pdf")
+
+        self.assertIn("Not an openbrain staged file", result)
+
+    async def test_ingest_document_cleans_only_staged_files(self):
+        mcp = _Mcp()
+        library_tools.register(mcp)
+        result = {"title": "Paper", "filepath": "/library/paper.pdf", "chunks": 1}
+        with tempfile.TemporaryDirectory() as tempdir:
+            staging = Path(tempdir) / "staging"
+            staging.mkdir()
+            staged_file = staging / "paper.pdf"
+            staged_file.write_text("pdf")
+            outside_file = Path(tempdir) / "outside.pdf"
+            outside_file.write_text("pdf")
+
+            with (
+                patch.object(brain, "INGEST_STAGING_PATH", staging),
+                patch.object(brain, "ingest_document_pipeline", AsyncMock(return_value=result)),
+            ):
+                await mcp.tools["ingest_document"](str(staged_file))
+                await mcp.tools["ingest_document"](str(outside_file))
+
+            self.assertFalse(staged_file.exists())
+            self.assertTrue(outside_file.exists())
+
     async def test_document_ingest_routes_event_through_store_thought(self):
         connection = _IngestConnection()
         store_thought = AsyncMock(return_value="thought-1")

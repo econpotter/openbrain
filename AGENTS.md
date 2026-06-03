@@ -27,6 +27,7 @@ openbrain/
 │       ├── capture.py #     capture_thought
 │       ├── search.py  #     search_thoughts, browse_recent, get_stats
 │       ├── library.py #     ingest_document, ingest_directory, search_library,
+│       │              #     prepare_document_ingest, ingest_staged_document,
 │       │              #     update_library, update_status
 │       ├── entities.py#     add_person, get_person, list_people, update_person,
 │       │              #     add_project, list_projects, update_project, refresh_embeddings,

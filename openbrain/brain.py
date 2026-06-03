@@ -11,7 +11,9 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
+import socket
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -44,6 +46,10 @@ _cfg = _load_config()
 
 DATABASE_URL: str = os.environ["DATABASE_URL"]
 LIBRARY_PATH: Path = Path(_cfg["library_path"]).expanduser()
+INGEST_CONFIG: dict = _cfg.get("ingest", {})
+INGEST_STAGING_PATH: Path = Path(
+    INGEST_CONFIG.get("staging_path", "/tmp/openbrain-ingest")
+).expanduser()
 EXTRACTION_CONFIG: dict = _cfg.get("extraction", {})
 
 _STOPWORDS = frozenset({
@@ -745,6 +751,30 @@ def _make_filename(
     parts.append(_title_slug(title) or re.sub(r"[^\w]", "-", title.lower())[:40])
     name = re.sub(r"[^\w\-]", "", "-".join(parts))
     return name + ext
+
+
+def _safe_staged_filename(filename: str) -> str:
+    path = Path(filename)
+    stem = re.sub(r"[^\w\-]+", "-", path.stem).strip("-") or "document"
+    suffix = re.sub(r"[^\w.]", "", path.suffix.lower())
+    return f"{stem}-{secrets.token_hex(4)}{suffix}"
+
+
+def prepare_ingest_staging_path(filename: str) -> dict:
+    INGEST_STAGING_PATH.mkdir(parents=True, exist_ok=True)
+    staged_path = (INGEST_STAGING_PATH / _safe_staged_filename(filename)).resolve()
+    host = INGEST_CONFIG.get("staging_host") or socket.gethostname()
+    return {
+        "filepath": str(staged_path),
+        "host": host,
+        "scp_destination": f"{host}:{staged_path}",
+    }
+
+
+def is_ingest_staged_path(filepath: str | Path) -> bool:
+    path = Path(filepath).expanduser().resolve()
+    staging_path = INGEST_STAGING_PATH.resolve()
+    return path == staging_path or staging_path in path.parents
 
 
 # ---------------------------------------------------------------------------

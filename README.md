@@ -486,3 +486,8 @@ scripts/
   openbrain-backup.service    systemd unit template for backup job
   openbrain-backup.timer      systemd timer (runs backup daily)
 ```
+
+Remote document ingest uses `prepare_document_ingest` to reserve a staging path,
+then `ingest_staged_document` after the PDF/text file has been copied there.
+The final PDF is stored under `library_path`; Postgres stores metadata, paths,
+hashes, and searchable text chunks.

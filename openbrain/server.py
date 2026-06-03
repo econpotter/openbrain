@@ -43,7 +43,7 @@ openbrain is a personal AI memory and knowledge base. Use these patterns when in
 - "Who needs follow-up?" — call list_follow_ups(within_days=7).
 - "Where is document X stored?" — call get_library_record(query).
 - Before memory cleanup — call run_memory_maintenance(dry_run=True); use dry_run=False only with the exact approved synthesis and source thought IDs.
-- "Ingest this file" from a remote client machine — SCP the file to the MCP server first, appending a random alphanumeric suffix to avoid collisions (e.g. scp reason:/path/to/paper.pdf rhyme:/tmp/paper-<random>.pdf), then call ingest_document(filepath="/tmp/paper-<random>.pdf"). The pipeline copies the file to LIBRARY_PATH with a standardized name and cleans up the tmp file automatically.
+- "Ingest this file" from a remote client machine — call prepare_document_ingest(filename), have the user or client copy the PDF/text file to the returned SCP destination, then call ingest_staged_document(filepath=<returned path>). The pipeline copies the file to LIBRARY_PATH with a standardized name and cleans up the staged copy automatically.
 - If ingest_document reports missing metadata, do NOT re-ingest. Instead ask the user for a BibTeX entry or title, then call update_library(query=<title>, bibtex=...) or update_library(query=<title>, title=...) to fix the record in place.
 - Read openbrain://tool-guide, openbrain://schema-summary, or openbrain://capture-policy when you need stable guidance before choosing a tool.
 """.strip(),

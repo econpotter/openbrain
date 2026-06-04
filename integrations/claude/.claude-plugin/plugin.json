@@ -1,0 +1,7 @@
+{
+  "name": "ob",
+  "description": "Ergonomic /ob:* commands over the openbrain MCP server: capture thoughts/decisions/preferences/project-updates, ingest documents, search the brain + library, and get a daily/weekly briefing. Requires the openbrain MCP server connected in the session.",
+  "author": {
+    "name": "Nicholas A. Potter"
+  }
+}

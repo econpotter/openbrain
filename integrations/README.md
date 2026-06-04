@@ -1,37 +1,38 @@
 # openbrain integrations
 
-Assistant-facing glue for openbrain. The openbrain **MCP server is the
-contract** — it exposes the tools (`capture_thought`, `ingest_document`,
-`search_brain`, `get_briefing`, …) and is provider-agnostic: any MCP client can
-connect. The directories here are thin per-provider wrappers that give those
-tools ergonomic commands (`/ob:capture`, etc.). They add no new capability —
-only routing and nicer invocation.
+Assistant-facing skill files for openbrain. The openbrain **MCP server is the
+contract**: it exposes the tools (`capture_thought`, `ingest_document`,
+`search_brain`, `get_briefing`, ...) and is provider-agnostic. Any MCP client
+can connect.
+
+The files in this directory add no new capability. They teach assistants how to
+route common requests to the right openbrain MCP tools.
 
 ```
 integrations/
-  README.md          ← this file: canonical command catalog (source of truth)
-  claude/            ← Claude Code plugin (local marketplace)
-  gemini/            ← (future) Gemini extension
-  codex/             ← (future) Codex prompts
+  README.md
+  skills/
+    openbrain-capture/SKILL.md
+    openbrain-ingest/SKILL.md
+    openbrain-search/SKILL.md
+    openbrain-briefing/SKILL.md
+    openbrain-maintenance/SKILL.md
 ```
 
-When adding a new provider, restate the **canonical catalog** below in that
-provider's format. Keep the *semantics* (which tool, routing, args) identical —
-this README is the single source of truth.
+## Skills
 
-## Canonical command catalog
-
-| Command | Purpose | openbrain tool(s) |
+| Skill | Purpose | openbrain tool(s) |
 |---|---|---|
-| `capture` | Persist a thought/decision/preference/project-update | route to `remember_preference` / `capture_decision` / `capture_project_update` / `capture_thought` by content type |
-| `ingest`  | Add a document or directory to the library | same-host: `ingest_document` / `ingest_directory`; remote: `prepare_document_ingest` → copy → `ingest_staged_document`; fix metadata with `update_library` (never re-ingest) |
-| `search`  | "What do I know about X?" | `search_brain` (+ `search_library`, `search_by_entity`, `get_library_record`) |
-| `briefing`| What's on my plate | `get_briefing` + `list_follow_ups` (+ calendar merge if available) |
+| `openbrain-capture` | Persist a thought, decision, preference, or project update | Route to `remember_preference`, `capture_decision`, `capture_project_update`, or `capture_thought` by content type |
+| `openbrain-ingest` | Add a document or directory to the library | Same-host: `ingest_document` / `ingest_directory`; remote: `prepare_document_ingest` -> copy -> `ingest_staged_document`; fix metadata with `update_library` |
+| `openbrain-search` | Answer "what do I know about X?" | `search_brain`, plus `search_library`, `search_by_entity`, or `get_library_record` when useful |
+| `openbrain-briefing` | Show what's on the user's plate | `get_briefing`, plus calendar merge if available; `list_follow_ups` only for follow-up-specific or wider-window queries |
+| `openbrain-maintenance` | Consolidate recent memory | `run_memory_maintenance(dry_run=True)` first; apply only after exact user approval |
 
-Routing detail for each command lives in `claude/skills/<command>/SKILL.md` —
-those bodies are the reference wording; mirror them per provider.
+The `openbrain-*` names are intentionally namespaced so they do not collide with
+generic skills such as `search`, `capture`, or `ingest`.
 
-## Prerequisite (all providers)
+## Prerequisite
 
 The openbrain MCP server must be connected in the client session. With the
 Compose stack up, it serves streamable HTTP on `:8000` (behind Caddy on `:8443`
@@ -52,30 +53,6 @@ for remote). MCP connection snippet:
 For a local stdio dev run, set `server.transport: stdio` in `config.yaml` and
 point the client at `python -m openbrain.server`.
 
-> Commands fail when embeddings are down (every capture/search embeds text).
-> If you see `All embedding providers failed: …`, fix the embed provider
-> (`config.yaml: embed`) — not the command.
+## Installing
 
-## Claude Code (`integrations/claude/`)
-
-A self-contained local marketplace exposing `/ob:capture`, `/ob:ingest`,
-`/ob:search`, `/ob:briefing`.
-
-### Install
-
-```
-/plugin marketplace add <path-to-repo>/openbrain/integrations/claude
-/plugin install ob@ob
-```
-
-Then the `/ob:*` commands are available in every project on the machine.
-Restart the session if they don't appear immediately. Verify with `/plugin`
-(should list `ob@ob` enabled) and that `mcp__openbrain__*` tools are present.
-
-### Update after editing a skill
-
-```
-/plugin marketplace update ob
-```
-
-(or remove + re-add the marketplace). Skill edits are picked up on next session.
+Copy or link to your preferred skill location.

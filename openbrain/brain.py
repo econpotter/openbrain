@@ -52,15 +52,71 @@ INGEST_STAGING_PATH: Path = Path(
 ).expanduser()
 EXTRACTION_CONFIG: dict = _cfg.get("extraction", {})
 
-_STOPWORDS = frozenset({
-    "a", "an", "the", "and", "or", "but", "nor", "for", "yet", "so",
-    "of", "in", "on", "at", "to", "by", "up", "as", "is", "it", "its",
-    "from", "with", "into", "onto", "upon", "over", "under", "about",
-    "are", "was", "were", "be", "been", "being", "have", "has", "had",
-    "do", "does", "did", "will", "would", "could", "should", "may",
-    "might", "shall", "can", "this", "that", "these", "those", "their",
-    "not", "no", "via", "per", "vs", "between", "each",
-})
+_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "nor",
+        "for",
+        "yet",
+        "so",
+        "of",
+        "in",
+        "on",
+        "at",
+        "to",
+        "by",
+        "up",
+        "as",
+        "is",
+        "it",
+        "its",
+        "from",
+        "with",
+        "into",
+        "onto",
+        "upon",
+        "over",
+        "under",
+        "about",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "shall",
+        "can",
+        "this",
+        "that",
+        "these",
+        "those",
+        "their",
+        "not",
+        "no",
+        "via",
+        "per",
+        "vs",
+        "between",
+        "each",
+    }
+)
 
 _DOI_RE = re.compile(r"\b(10\.\d{4,}(?:\.\d+)*/\S+)\b")
 
@@ -87,11 +143,7 @@ def _parse_bibtex(bibtex_str: str) -> dict:
     year_str = entry.get("year", "")
     year = int(year_str) if year_str.isdigit() else None
 
-    source = (
-        entry.get("journal")
-        or entry.get("booktitle")
-        or entry.get("publisher")
-    )
+    source = entry.get("journal") or entry.get("booktitle") or entry.get("publisher")
 
     return {
         "title": entry.get("title", "").strip("{}"),
@@ -128,12 +180,14 @@ async def _embed_with_config(text: str, config: dict) -> list[float]:
     model = config["model"]
     if provider == "voyage":
         import voyageai
+
         client = voyageai.AsyncClient(api_key=os.environ["VOYAGE_API_KEY"])
         result = await client.embed([text], model=model)
         return result.embeddings[0]
 
     if provider == "openrouter":
         from openai import AsyncOpenAI
+
         client = AsyncOpenAI(
             api_key=os.environ["OPENROUTER_API_KEY"],
             base_url="https://openrouter.ai/api/v1",
@@ -143,6 +197,7 @@ async def _embed_with_config(text: str, config: dict) -> list[float]:
 
     if provider == "litellm":
         from openai import AsyncOpenAI
+
         litellm_url = _litellm_url(config)
         if not litellm_url:
             raise ValueError(
@@ -175,17 +230,21 @@ async def _enriched_entity_text(table: str, entity_id: str) -> str:
     pool = await get_pool()
     if table == "people":
         async with pool.acquire() as conn:
-            row = dict(await conn.fetchrow(
-                "SELECT name, affiliation, relationship, notes FROM people WHERE id = $1",
-                entity_id,
-            ))
+            row = dict(
+                await conn.fetchrow(
+                    "SELECT name, affiliation, relationship, notes FROM people WHERE id = $1",
+                    entity_id,
+                )
+            )
         base = await _entity_text("people", row)
         name, kind = row["name"], "person"
     else:
         async with pool.acquire() as conn:
-            row = dict(await conn.fetchrow(
-                "SELECT name, description FROM projects WHERE id = $1", entity_id
-            ))
+            row = dict(
+                await conn.fetchrow(
+                    "SELECT name, description FROM projects WHERE id = $1", entity_id
+                )
+            )
         base = await _entity_text("projects", row)
         name, kind = row["name"], "project"
 
@@ -263,6 +322,10 @@ async def store_thought(content: str, metadata: dict | None = None) -> str:
             json.dumps(meta),
             thought_type,
         )
+    # upsert_thought RETURNS JSONB; asyncpg gives it back as a str (no jsonb
+    # codec registered on the pool), so decode before subscripting.
+    if isinstance(result, str):
+        result = json.loads(result)
     thought_id = str(result["id"])
 
     people = meta.get("people") or []
@@ -509,8 +572,12 @@ async def apply_maintenance_synthesis(thought_ids: list[str], synthesis: str) ->
 
 async def _entity_text(table: str, row: dict) -> str:
     if table == "people":
-        parts = [row.get("name") or "", row.get("affiliation") or "",
-                 row.get("relationship") or "", row.get("notes") or ""]
+        parts = [
+            row.get("name") or "",
+            row.get("affiliation") or "",
+            row.get("relationship") or "",
+            row.get("notes") or "",
+        ]
     else:
         parts = [row.get("name") or "", row.get("description") or ""]
     return " ".join(p for p in parts if p)
@@ -527,7 +594,10 @@ async def add_person(
         row = await conn.fetchrow(
             "INSERT INTO people (name, affiliation, relationship, notes) "
             "VALUES ($1, $2, $3, $4) RETURNING id, name, affiliation, relationship, notes",
-            name, affiliation, relationship, notes,
+            name,
+            affiliation,
+            relationship,
+            notes,
         )
     inserted = dict(row)
     text = await _entity_text("people", inserted)
@@ -550,7 +620,10 @@ async def add_project(
         row = await conn.fetchrow(
             "INSERT INTO projects (name, description, status, start_date) "
             "VALUES ($1, $2, $3, $4) RETURNING id, name, description, status, start_date",
-            name, description, status, start_date,
+            name,
+            description,
+            status,
+            start_date,
         )
     inserted = dict(row)
     text = await _entity_text("projects", inserted)
@@ -584,7 +657,7 @@ async def update_person(person_id: str, updates: dict) -> dict | None:
     if not fields:
         return None
     pool = await get_pool()
-    set_clause = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(fields))
+    set_clause = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
     values = [person_id] + list(fields.values())
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -649,7 +722,7 @@ async def update_project(project_id: str, updates: dict) -> dict | None:
     if not fields:
         return None
     pool = await get_pool()
-    set_clause = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(fields))
+    set_clause = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
     values = [project_id] + list(fields.values())
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -717,8 +790,11 @@ async def get_project_profile(name: str) -> dict | None:
 # Slug / filename utilities
 # ---------------------------------------------------------------------------
 
+
 def _clean_words(text: str) -> list[str]:
-    return [w for w in re.sub(r"[^\w\s]", "", text.lower()).split() if w not in _STOPWORDS]
+    return [
+        w for w in re.sub(r"[^\w\s]", "", text.lower()).split() if w not in _STOPWORDS
+    ]
 
 
 def _title_slug(title: str, max_words: int = 5) -> str:
@@ -781,6 +857,7 @@ def is_ingest_staged_path(filepath: str | Path) -> bool:
 # PDF / text extraction and chunking
 # ---------------------------------------------------------------------------
 
+
 def _sha256(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -791,6 +868,7 @@ def _sha256(path: Path) -> str:
 
 def _extract_pdf(filepath: str) -> tuple[str, str]:
     import pdfplumber
+
     pages = []
     with pdfplumber.open(filepath) as pdf:
         for page in pdf.pages:
@@ -808,7 +886,7 @@ def _chunk_text(text: str, chunk_size: int = 400, overlap: int = 50) -> list[str
     words = text.split()
     chunks, i = [], 0
     while i < len(words):
-        chunks.append(" ".join(words[i: i + chunk_size]))
+        chunks.append(" ".join(words[i : i + chunk_size]))
         i += chunk_size - overlap
     return [c for c in chunks if c.strip()]
 
@@ -816,6 +894,7 @@ def _chunk_text(text: str, chunk_size: int = 400, overlap: int = 50) -> list[str
 # ---------------------------------------------------------------------------
 # CrossRef metadata lookup
 # ---------------------------------------------------------------------------
+
 
 def _crossref_lookup(doi: str) -> dict:
     result: dict = {}
@@ -867,6 +946,7 @@ def _crossref_lookup(doi: str) -> dict:
 # Library DB functions
 # ---------------------------------------------------------------------------
 
+
 async def ingest_document_pipeline(
     filepath: str,
     doc_type: str = "paper",
@@ -896,7 +976,9 @@ async def ingest_document_pipeline(
     loop = asyncio.get_event_loop()
     ext = path.suffix.lower()
     if ext == ".pdf":
-        first_page, full_text = await loop.run_in_executor(None, _extract_pdf, str(path))
+        first_page, full_text = await loop.run_in_executor(
+            None, _extract_pdf, str(path)
+        )
     else:
         full_text = path.read_text(errors="replace")
         first_page = full_text[:3000]
@@ -948,8 +1030,16 @@ async def ingest_document_pipeline(
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             RETURNING id, title
             """,
-            title, authors, year, source, doc_type,
-            abstract, str(dest), file_hash, doi, bibtex,
+            title,
+            authors,
+            year,
+            source,
+            doc_type,
+            abstract,
+            str(dest),
+            file_hash,
+            doi,
+            bibtex,
         )
     library_id = row["id"]
 
@@ -960,17 +1050,23 @@ async def ingest_document_pipeline(
             await conn.execute(
                 "INSERT INTO chunks (library_id, content, embedding, chunk_index) "
                 "VALUES ($1, $2, $3, $4)",
-                library_id, chunk_content, emb, i,
+                library_id,
+                chunk_content,
+                emb,
+                i,
             )
 
     author_str = " & ".join(authors) if authors else "Unknown"
     thought = f"Ingested: {author_str} {year or ''} — {title}".strip()
-    await store_thought(thought, {
-        "type": "ingest_event",
-        "source": "mcp",
-        "people": authors,
-        "doc_type": doc_type,
-    })
+    await store_thought(
+        thought,
+        {
+            "type": "ingest_event",
+            "source": "mcp",
+            "people": authors,
+            "doc_type": doc_type,
+        },
+    )
 
     return {
         "id": str(library_id),
@@ -1053,15 +1149,25 @@ async def get_library_record(query: str) -> dict | None:
 
 
 async def update_library_record(record_id: str, updates: dict) -> dict | None:
-    allowed = {"title", "authors", "year", "source", "doc_type", "abstract",
-               "status", "doi", "bibtex", "filepath"}
+    allowed = {
+        "title",
+        "authors",
+        "year",
+        "source",
+        "doc_type",
+        "abstract",
+        "status",
+        "doi",
+        "bibtex",
+        "filepath",
+    }
     fields = {k: v for k, v in updates.items() if k in allowed}
     if "source" in fields and fields["source"]:
         fields["source"] = _source_slug(fields["source"]) or fields["source"]
     if not fields:
         return None
     pool = await get_pool()
-    set_clause = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(fields))
+    set_clause = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(fields))
     values = [record_id] + list(fields.values())
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -1105,7 +1211,10 @@ async def search_brain(
                 ORDER BY score DESC
                 LIMIT $4
                 """,
-                embedding, fts_query, threshold, count,
+                embedding,
+                fts_query,
+                threshold,
+                count,
             )
         return [dict(r) for r in rows]
 
@@ -1136,7 +1245,10 @@ async def search_brain(
                 ORDER BY score DESC
                 LIMIT $4
                 """,
-                embedding, fts_query, threshold, count,
+                embedding,
+                fts_query,
+                threshold,
+                count,
             )
         return [dict(r) for r in rows]
 
@@ -1176,11 +1288,13 @@ async def get_person_profile(name: str) -> dict | None:
 
     pool = await get_pool()
     async with pool.acquire() as conn:
-        person = dict(await conn.fetchrow(
-            "SELECT id, name, affiliation, relationship, notes, follow_up_date "
-            "FROM people WHERE id = $1",
-            person["id"],
-        ))
+        person = dict(
+            await conn.fetchrow(
+                "SELECT id, name, affiliation, relationship, notes, follow_up_date "
+                "FROM people WHERE id = $1",
+                person["id"],
+            )
+        )
 
     thoughts = await thoughts_mentioning(person["name"], "person", limit=50)
     cooc = _extract_cooccurrences(thoughts, exclude=person["name"])
@@ -1304,4 +1418,7 @@ async def table_stats() -> dict:
     pool = await get_pool()
     async with pool.acquire() as conn:
         stats = await conn.fetchval("SELECT brain_stats_aggregate()")
+    # JSONB return arrives as a str (no jsonb codec on the pool).
+    if isinstance(stats, str):
+        stats = json.loads(stats)
     return dict(stats)

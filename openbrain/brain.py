@@ -52,6 +52,11 @@ INGEST_STAGING_PATH: Path = Path(
 ).expanduser()
 EXTRACTION_CONFIG: dict = _cfg.get("extraction", {})
 
+# Per-request embedding timeout (seconds). Without it a dead or unsupported
+# endpoint (e.g. OpenRouter, which has no /embeddings route) hangs until the
+# default client timeout, blocking every capture. Override via embed.timeout.
+EMBED_TIMEOUT: float = float(_cfg.get("embed", {}).get("timeout", 30))
+
 _STOPWORDS = frozenset(
     {
         "a",
@@ -191,6 +196,7 @@ async def _embed_with_config(text: str, config: dict) -> list[float]:
         client = AsyncOpenAI(
             api_key=os.environ["OPENROUTER_API_KEY"],
             base_url="https://openrouter.ai/api/v1",
+            timeout=EMBED_TIMEOUT,
         )
         result = await client.embeddings.create(input=[text], model=model)
         return result.data[0].embedding
@@ -206,6 +212,7 @@ async def _embed_with_config(text: str, config: dict) -> list[float]:
         client = AsyncOpenAI(
             api_key=os.environ["LITELLM_API_KEY"],
             base_url=litellm_url,
+            timeout=EMBED_TIMEOUT,
         )
         result = await client.embeddings.create(input=[text], model=model)
         return result.data[0].embedding
@@ -220,7 +227,15 @@ async def embed(text: str) -> list[float]:
     errors = []
     for config in _configs_with_fallback(_cfg["embed"]):
         try:
-            return await _embed_with_config(text, config)
+            return await asyncio.wait_for(
+                _embed_with_config(text, config),
+                timeout=EMBED_TIMEOUT + 5,
+            )
+        except asyncio.TimeoutError:
+            errors.append(
+                f"{config['provider']}/{config['model']}: timed out after "
+                f"{EMBED_TIMEOUT + 5}s"
+            )
         except Exception as exc:
             errors.append(f"{config['provider']}/{config['model']}: {exc}")
     raise RuntimeError("All embedding providers failed: " + "; ".join(errors))

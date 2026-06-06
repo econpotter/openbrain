@@ -1,5 +1,5 @@
 """
-tools/maintenance.py — memory consolidation tools.
+tools/maintenance.py — memory extraction and embedding maintenance tools.
 """
 
 from openbrain import brain
@@ -7,16 +7,16 @@ from openbrain import brain
 
 def register(mcp):
     @mcp.tool
-    async def run_memory_maintenance(
+    async def run_memory_extraction(
         dry_run: bool = True,
         approved_synthesis: str | None = None,
         thought_ids: list[str] | None = None,
     ) -> str:
         """
-        Consolidate recent memory records into a durable synthesis.
+        Extract recent memory records into a durable synthesis.
 
         Use this only when the user asks to consolidate, clean up, or run
-        memory maintenance. Default dry_run=True returns the proposed synthesis
+        memory extraction. Default dry_run=True returns the proposed synthesis
         and source thought IDs without archiving anything. Set dry_run=False
         only after the user approves applying the exact dry-run synthesis.
 
@@ -26,9 +26,9 @@ def register(mcp):
             thought_ids: Exact source thought IDs approved from a dry run.
         """
         if dry_run:
-            result = await brain.preview_maintenance_once()
+            result = await brain.preview_extraction_once()
             if result["processed"] == 0:
-                return "No maintenance candidates found."
+                return "No extraction candidates found."
             lines = [
                 f"DRY RUN: {result['processed']} thought(s) would be consolidated.",
                 "",
@@ -47,8 +47,28 @@ def register(mcp):
                 "thought_ids=<approved source IDs>."
             )
 
-        result = await brain.apply_maintenance_synthesis(thought_ids, approved_synthesis)
+        result = await brain.apply_extraction_synthesis(thought_ids, approved_synthesis)
         return (
             f"Processed {result['processed']} thought(s); "
             f"created {result['syntheses']} synthesis record(s)."
+        )
+
+    @mcp.tool
+    async def backfill_embeddings(limit: int = 500) -> str:
+        """
+        Embed chunks stored without an embedding (e.g. the embed model was down
+        when a paper was fetched or a document ingested). Run this after the
+        local embedding model is back up. Safe to re-run; it only touches chunks
+        whose embedding is still missing.
+
+        Args:
+            limit: Maximum number of pending chunks to embed in this run.
+        """
+        result = await brain.backfill_chunk_embeddings(limit=limit)
+        if result["pending_before"] == 0:
+            return "No chunks pending embedding."
+        return (
+            f"Backfill: {result['embedded']} embedded, {result['failed']} failed, "
+            f"{result['pending_after']} still pending "
+            f"(of {result['pending_before']} before this run)."
         )

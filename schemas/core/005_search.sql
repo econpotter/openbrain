@@ -1,7 +1,7 @@
 -- Semantic search over thoughts.
 
 CREATE OR REPLACE FUNCTION match_thoughts(
-    query_embedding VECTOR(1536),
+    query_embedding VECTOR(768),
     match_threshold FLOAT DEFAULT 0.5,
     match_count     INT   DEFAULT 10,
     filter          JSONB DEFAULT '{}'::jsonb
@@ -27,7 +27,7 @@ $$;
 
 -- Semantic search over document chunks, returning library metadata.
 CREATE OR REPLACE FUNCTION match_chunks(
-    query_embedding VECTOR(1536),
+    query_embedding VECTOR(768),
     match_threshold FLOAT DEFAULT 0.5,
     match_count     INT   DEFAULT 10,
     year_min        INT   DEFAULT NULL
@@ -61,7 +61,7 @@ $$;
 
 -- Semantic search over people.
 CREATE OR REPLACE FUNCTION match_people(
-    query_embedding VECTOR(1536),
+    query_embedding VECTOR(768),
     match_threshold FLOAT DEFAULT 0.3,
     match_count     INT   DEFAULT 10
 )
@@ -85,7 +85,7 @@ $$;
 
 -- Semantic search over projects.
 CREATE OR REPLACE FUNCTION match_projects(
-    query_embedding VECTOR(1536),
+    query_embedding VECTOR(768),
     match_threshold FLOAT DEFAULT 0.3,
     match_count     INT   DEFAULT 10
 )

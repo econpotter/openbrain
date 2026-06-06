@@ -9,6 +9,7 @@ first use. Configuration is loaded from config.yaml (non-secrets) and .env
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -24,7 +25,11 @@ import pgvector.asyncpg
 import yaml
 from dotenv import load_dotenv
 
+from openbrain import sources
+
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 _CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
 
@@ -241,6 +246,21 @@ async def embed(text: str) -> list[float]:
     raise RuntimeError("All embedding providers failed: " + "; ".join(errors))
 
 
+async def _embed_or_none(text: str) -> list[float] | None:
+    """
+    Best-effort embedding for the write path. Returns the vector on success, or
+    None if the embed model is unavailable. Callers store the chunk text anyway
+    (NULL embedding); the maintenance backfill sweep embeds it later. This keeps
+    fetch/ingest from crashing on an embed outage, and avoids substituting a
+    different model whose vectors would be incompatible with the index.
+    """
+    try:
+        return await embed(text)
+    except Exception as exc:
+        logger.warning("Embedding deferred (model unavailable): %s", exc)
+        return None
+
+
 async def _enriched_entity_text(table: str, entity_id: str) -> str:
     pool = await get_pool()
     if table == "people":
@@ -401,7 +421,7 @@ async def recent_thoughts(since_hours: int = 24, limit: int = 50) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-async def maintenance_thoughts(
+async def extract_thoughts(
     since_hours: int = 24,
     limit: int = 50,
 ) -> list[dict]:
@@ -423,7 +443,7 @@ async def maintenance_thoughts(
     return [dict(r) for r in rows]
 
 
-def _maintenance_prompt(thoughts: list[dict]) -> str:
+def _extraction_prompt(thoughts: list[dict]) -> str:
     lines = [
         "Consolidate these openbrain memory records.",
         "",
@@ -501,7 +521,7 @@ async def complete_extraction_prompt(prompt: str) -> str:
     raise RuntimeError("All extraction providers failed: " + "; ".join(errors))
 
 
-async def archive_thoughts(thought_ids: list[str], maintenance_run_id: str) -> None:
+async def archive_thoughts(thought_ids: list[str], extraction_run_id: str) -> None:
     if not thought_ids:
         return
     pool = await get_pool()
@@ -512,23 +532,23 @@ async def archive_thoughts(thought_ids: list[str], maintenance_run_id: str) -> N
             SET metadata = metadata || jsonb_build_object(
                     'archived', true,
                     'archived_at', now(),
-                    'maintenance_run_id', $2
+                    'extraction_run_id', $2
                 )
             WHERE id = ANY($1::uuid[])
             """,
             thought_ids,
-            maintenance_run_id,
+            extraction_run_id,
         )
 
 
-async def run_maintenance_once() -> dict:
+async def run_extraction_once() -> dict:
     since_hours = int(EXTRACTION_CONFIG.get("lookback_hours", 24))
     batch_size = int(EXTRACTION_CONFIG.get("batch_size", 50))
-    thoughts = await maintenance_thoughts(since_hours, batch_size)
+    thoughts = await extract_thoughts(since_hours, batch_size)
     if not thoughts:
         return {"processed": 0, "syntheses": 0}
 
-    prompt = _maintenance_prompt(thoughts)
+    prompt = _extraction_prompt(thoughts)
     synthesis = await complete_extraction_prompt(prompt)
     if not synthesis:
         return {"processed": 0, "syntheses": 0}
@@ -539,24 +559,24 @@ async def run_maintenance_once() -> dict:
         synthesis,
         {
             "type": "synthesis",
-            "source": "openbrain-maintenance",
-            "source_type": "maintenance",
+            "source": "openbrain-extraction",
+            "source_type": "extraction",
             "thought_ids": thought_ids,
-            "maintenance_run_id": run_id,
+            "extraction_run_id": run_id,
         },
     )
     await archive_thoughts(thought_ids, run_id)
     return {"processed": len(thoughts), "syntheses": 1}
 
 
-async def preview_maintenance_once() -> dict:
+async def preview_extraction_once() -> dict:
     since_hours = int(EXTRACTION_CONFIG.get("lookback_hours", 24))
     batch_size = int(EXTRACTION_CONFIG.get("batch_size", 50))
-    thoughts = await maintenance_thoughts(since_hours, batch_size)
+    thoughts = await extract_thoughts(since_hours, batch_size)
     if not thoughts:
         return {"processed": 0, "synthesis": "", "thought_ids": []}
 
-    prompt = _maintenance_prompt(thoughts)
+    prompt = _extraction_prompt(thoughts)
     synthesis = await complete_extraction_prompt(prompt)
     return {
         "processed": len(thoughts),
@@ -565,7 +585,7 @@ async def preview_maintenance_once() -> dict:
     }
 
 
-async def apply_maintenance_synthesis(thought_ids: list[str], synthesis: str) -> dict:
+async def apply_extraction_synthesis(thought_ids: list[str], synthesis: str) -> dict:
     if not thought_ids or not synthesis.strip():
         return {"processed": 0, "syntheses": 0}
 
@@ -575,10 +595,10 @@ async def apply_maintenance_synthesis(thought_ids: list[str], synthesis: str) ->
         synthesis.strip(),
         {
             "type": "synthesis",
-            "source": "openbrain-maintenance",
-            "source_type": "maintenance",
+            "source": "openbrain-extraction",
+            "source_type": "extraction",
             "thought_ids": thought_ids,
-            "maintenance_run_id": run_id,
+            "extraction_run_id": run_id,
         },
     )
     await archive_thoughts(thought_ids, run_id)
@@ -1059,8 +1079,11 @@ async def ingest_document_pipeline(
     library_id = row["id"]
 
     chunks = _chunk_text(full_text)
+    pending = 0
     for i, chunk_content in enumerate(chunks):
-        emb = await embed(chunk_content)
+        emb = await _embed_or_none(chunk_content)
+        if emb is None:
+            pending += 1
         async with pool.acquire() as conn:
             await conn.execute(
                 "INSERT INTO chunks (library_id, content, embedding, chunk_index) "
@@ -1088,7 +1111,211 @@ async def ingest_document_pipeline(
         "title": title,
         "filepath": str(dest),
         "chunks": len(chunks),
+        "chunks_pending_embedding": pending,
         "metadata_missing": metadata_missing,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Paper metadata/abstract fetch (no local file)
+# ---------------------------------------------------------------------------
+
+
+def _paper_sources_order() -> list[str]:
+    """Effective source order from config.yaml paper_sources (order ∩ enabled)."""
+    cfg = _cfg.get("paper_sources") or {}
+    order = cfg.get("order") or sources._DEFAULT_ORDER
+    enabled = cfg.get("enabled")
+    if enabled is not None:
+        order = [s for s in order if s in enabled]
+    return order
+
+
+async def _store_paper(
+    meta: dict, doc_type: str = "paper", force: bool = False
+) -> dict:
+    """
+    Store a fetched paper as a metadata-only library record (no file), embedding
+    the abstract as a chunk (kind='abstract') so it flows through existing
+    semantic search. Deduplicates by DOI.
+    """
+    pool = await get_pool()
+    doi = meta.get("doi")
+    abstract = meta.get("abstract")
+    source = meta.get("source")
+    if source:
+        source = _source_slug(source) or source
+
+    if doi:
+        async with pool.acquire() as conn:
+            existing = await conn.fetchrow(
+                "SELECT id, title FROM library WHERE doi = $1", doi
+            )
+        if existing and not force:
+            return {
+                "id": str(existing["id"]),
+                "title": existing["title"],
+                "doi": doi,
+                "abstract_stored": False,
+                "embedded": False,
+                "deduped": True,
+            }
+        if existing and force:
+            async with pool.acquire() as conn:
+                await conn.execute("DELETE FROM library WHERE id = $1", existing["id"])
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO library
+                (title, authors, year, source, doc_type, abstract, doi, bibtex)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING id, title
+            """,
+            meta.get("title"),
+            meta.get("authors") or [],
+            meta.get("year"),
+            source,
+            doc_type,
+            abstract,
+            doi,
+            meta.get("bibtex"),
+        )
+    library_id = row["id"]
+
+    abstract_stored = False
+    embedded = False
+    if abstract:
+        emb = await _embed_or_none(abstract)
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO chunks (library_id, content, embedding, chunk_index, kind) "
+                "VALUES ($1, $2, $3, $4, 'abstract')",
+                library_id,
+                abstract,
+                emb,
+                0,
+            )
+        abstract_stored = True
+        embedded = emb is not None
+
+    authors = meta.get("authors") or []
+    author_str = " & ".join(authors) if authors else "Unknown"
+    thought = f"Fetched: {author_str} {meta.get('year') or ''} — {row['title']}".strip()
+    await store_thought(
+        thought,
+        {
+            "type": "ingest_event",
+            "source": "mcp",
+            "people": authors,
+            "doc_type": doc_type,
+        },
+    )
+
+    return {
+        "id": str(library_id),
+        "title": row["title"],
+        "authors": authors,
+        "year": meta.get("year"),
+        "doi": doi,
+        "abstract_stored": abstract_stored,
+        "embedded": embedded,
+        "deduped": False,
+    }
+
+
+async def fetch_paper(
+    identifier: str | None = None,
+    topic: str | None = None,
+    doc_type: str = "paper",
+    source_order: list[str] | None = None,
+    limit: int = 10,
+    force: bool = False,
+) -> dict:
+    """
+    Fetch paper metadata + abstract from external sources.
+
+    Topic mode (topic set): return ranked candidates without storing anything.
+    Lookup mode (identifier set): resolve one paper by DOI/arXiv/title and store
+    it as a metadata-only library record with the abstract embedded.
+    """
+    loop = asyncio.get_event_loop()
+    order = source_order or _paper_sources_order()
+
+    if topic is not None:
+        candidates = await loop.run_in_executor(
+            None, lambda: sources.resolve(topic=topic, order=order, limit=limit)
+        )
+        return {"mode": "topic", "candidates": candidates or []}
+
+    if not identifier:
+        raise ValueError("fetch_paper requires either identifier or topic.")
+
+    meta = await loop.run_in_executor(
+        None, lambda: sources.resolve(identifier=identifier, order=order)
+    )
+    if not meta:
+        return {"mode": "lookup", "found": False, "identifier": identifier}
+
+    stored = await _store_paper(meta, doc_type, force)
+    return {"mode": "lookup", "found": True, **stored}
+
+
+# ---------------------------------------------------------------------------
+# Embedding backfill (heal chunks stored without an embedding)
+# ---------------------------------------------------------------------------
+
+
+async def count_pending_embeddings() -> dict:
+    """Count chunks whose embedding is NULL (stored text, embedding deferred)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT kind, count(*) AS n FROM chunks "
+            "WHERE embedding IS NULL GROUP BY kind"
+        )
+    by_kind = {row["kind"]: row["n"] for row in rows}
+    return {"pending": sum(by_kind.values()), "by_kind": by_kind}
+
+
+async def backfill_chunk_embeddings(limit: int = 500) -> dict:
+    """
+    Embed chunks that were stored without an embedding (e.g. the embed model was
+    down at fetch/ingest time). Uses the same configured embed model, so the
+    vectors stay in one geometry. Per-chunk failures are skipped and retried on a
+    later run; only the embed model coming back fixes them.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        pending_before = await conn.fetchval(
+            "SELECT count(*) FROM chunks WHERE embedding IS NULL"
+        )
+        rows = await conn.fetch(
+            "SELECT id, content FROM chunks WHERE embedding IS NULL "
+            "ORDER BY created_at LIMIT $1",
+            limit,
+        )
+
+    embedded = 0
+    failed = 0
+    for row in rows:
+        try:
+            emb = await embed(row["content"])
+        except Exception as exc:
+            failed += 1
+            logger.warning("Backfill embed failed for chunk %s: %s", row["id"], exc)
+            continue
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE chunks SET embedding = $1 WHERE id = $2", emb, row["id"]
+            )
+        embedded += 1
+
+    return {
+        "pending_before": pending_before,
+        "embedded": embedded,
+        "failed": failed,
+        "pending_after": pending_before - embedded,
     }
 
 

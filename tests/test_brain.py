@@ -105,22 +105,32 @@ class _ExecuteConnection:
 class _BriefingConnection:
     async def fetch(self, query, *args):
         if "FROM projects" in query:
-            return [{"name": "Policy Trial", "description": "Evaluate policy.", "status": "active"}]
+            return [
+                {
+                    "name": "Policy Trial",
+                    "description": "Evaluate policy.",
+                    "status": "active",
+                }
+            ]
         if "FROM thoughts" in query:
-            return [{
-                "id": "thought-1",
-                "content": "Discuss estimation with Ada.",
-                "metadata": {"people": ["Ada"], "projects": ["Policy Trial"]},
-                "created_at": "recent",
-            }]
+            return [
+                {
+                    "id": "thought-1",
+                    "content": "Discuss estimation with Ada.",
+                    "metadata": {"people": ["Ada"], "projects": ["Policy Trial"]},
+                    "created_at": "recent",
+                }
+            ]
         if "FROM library" in query:
-            return [{
-                "title": "A Trial Paper",
-                "authors": ["Ada"],
-                "year": 2026,
-                "doc_type": "paper",
-                "created_at": "recent",
-            }]
+            return [
+                {
+                    "title": "A Trial Paper",
+                    "authors": ["Ada"],
+                    "year": 2026,
+                    "doc_type": "paper",
+                    "created_at": "recent",
+                }
+            ]
         raise AssertionError(f"Unexpected query: {query}")
 
 
@@ -220,7 +230,9 @@ class StoreThoughtTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("decision", metadata["tags"])
         self.assertEqual(metadata["projects"], ["openbrain"])
 
-    async def test_project_update_includes_project_in_content_and_validates_status(self):
+    async def test_project_update_includes_project_in_content_and_validates_status(
+        self,
+    ):
         mcp = _Mcp()
         capture_tools.register(mcp)
         store_thought = AsyncMock(return_value="thought-1")
@@ -237,7 +249,9 @@ class StoreThoughtTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "Stored project update thought-1")
         content, metadata = store_thought.await_args.args
-        self.assertEqual(content, "Project update for openbrain [active]: Ready for review.")
+        self.assertEqual(
+            content, "Project update for openbrain [active]: Ready for review."
+        )
         self.assertEqual(metadata["projects"], ["openbrain"])
 
         store_thought.reset_mock()
@@ -266,7 +280,11 @@ class ModelFallbackTests(unittest.IsolatedAsyncioTestCase):
             return [0.1, 0.2]
 
         with (
-            patch.object(brain, "_cfg", {"embed": embed_config, "litellm_url": "http://litellm:4000"}),
+            patch.object(
+                brain,
+                "_cfg",
+                {"embed": embed_config, "litellm_url": "http://litellm:4000"},
+            ),
             patch.object(brain, "_embed_with_config", _embed),
         ):
             result = await brain.embed("test")
@@ -367,7 +385,9 @@ class IngestPipelineTests(unittest.IsolatedAsyncioTestCase):
 
             with (
                 patch.object(brain, "INGEST_STAGING_PATH", staging),
-                patch.object(brain, "ingest_document_pipeline", AsyncMock(return_value=result)),
+                patch.object(
+                    brain, "ingest_document_pipeline", AsyncMock(return_value=result)
+                ),
             ):
                 await mcp.tools["ingest_document"](str(staged_file))
                 await mcp.tools["ingest_document"](str(outside_file))
@@ -384,7 +404,9 @@ class IngestPipelineTests(unittest.IsolatedAsyncioTestCase):
             library = Path(tempdir) / "library"
             with (
                 patch.object(brain, "LIBRARY_PATH", library),
-                patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+                patch.object(
+                    brain, "get_pool", AsyncMock(return_value=_Pool(connection))
+                ),
                 patch.object(brain, "embed", AsyncMock(return_value=[0.1, 0.2])),
                 patch.object(brain, "store_thought", store_thought),
             ):
@@ -405,9 +427,13 @@ class IngestPipelineTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             with (
                 patch.object(brain, "LIBRARY_PATH", Path(tempdir) / "library"),
-                patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+                patch.object(
+                    brain, "get_pool", AsyncMock(return_value=_Pool(connection))
+                ),
                 patch.object(brain, "embed", AsyncMock(return_value=[0.1, 0.2])),
-                patch.object(brain, "store_thought", AsyncMock(return_value="thought-1")),
+                patch.object(
+                    brain, "store_thought", AsyncMock(return_value="thought-1")
+                ),
             ):
                 result = await brain.ingest_document_pipeline(
                     str(fixture),
@@ -421,11 +447,219 @@ class IngestPipelineTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["chunks"], 1)
         chunk_inserts = [
-            args for query, args in connection.execute_calls
+            args
+            for query, args in connection.execute_calls
             if "INSERT INTO chunks" in query
         ]
         self.assertEqual(len(chunk_inserts), 1)
         self.assertIn("Synthetic control methods", chunk_inserts[0][1])
+
+
+class _PaperConnection:
+    def __init__(self, existing=None):
+        self.existing = existing
+        self.fetchrow_calls = []
+        self.execute_calls = []
+
+    async def fetchrow(self, query, *args):
+        self.fetchrow_calls.append((query, args))
+        if "SELECT id, title FROM library WHERE doi" in query:
+            return self.existing
+        if "INSERT INTO library" in query:
+            return {"id": "library-9", "title": args[0]}
+        raise AssertionError(f"Unexpected query: {query}")
+
+    async def execute(self, query, *args):
+        self.execute_calls.append((query, args))
+
+
+class _BackfillConnection:
+    def __init__(self, pending, rows):
+        self.pending = pending
+        self.rows = rows
+        self.updates = []
+
+    async def fetchval(self, query, *args):
+        return self.pending
+
+    async def fetch(self, query, *args):
+        return self.rows
+
+    async def execute(self, query, *args):
+        self.updates.append(args)
+
+
+class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
+    async def test_store_paper_inserts_record_abstract_chunk_and_event(self):
+        connection = _PaperConnection(existing=None)
+        store_thought = AsyncMock(return_value="thought-1")
+        meta = {
+            "title": "A Paper",
+            "authors": ["Ada Lovelace"],
+            "year": 2024,
+            "source": "Journal of Trials",
+            "abstract": "The abstract.",
+            "doi": "10.1/x",
+            "bibtex": "@article{...}",
+        }
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(brain, "embed", AsyncMock(return_value=[0.1, 0.2])),
+            patch.object(brain, "store_thought", store_thought),
+        ):
+            result = await brain._store_paper(meta)
+
+        self.assertEqual(result["title"], "A Paper")
+        self.assertTrue(result["abstract_stored"])
+        self.assertTrue(result["embedded"])
+        self.assertFalse(result["deduped"])
+        chunk_inserts = [
+            (query, args)
+            for query, args in connection.execute_calls
+            if "INSERT INTO chunks" in query
+        ]
+        self.assertEqual(len(chunk_inserts), 1)
+        self.assertEqual(chunk_inserts[0][1][1], "The abstract.")  # content arg
+        self.assertIn("'abstract'", chunk_inserts[0][0])  # kind in SQL
+        content, metadata = store_thought.await_args.args
+        self.assertIn("Fetched:", content)
+        self.assertEqual(metadata["type"], "ingest_event")
+
+    async def test_store_paper_dedups_existing_doi_without_insert(self):
+        connection = _PaperConnection(existing={"id": "library-1", "title": "A Paper"})
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(brain, "embed", AsyncMock(return_value=[0.1, 0.2])),
+            patch.object(brain, "store_thought", AsyncMock()),
+        ):
+            result = await brain._store_paper({"doi": "10.1/x", "title": "A Paper"})
+
+        self.assertTrue(result["deduped"])
+        self.assertFalse(result["abstract_stored"])
+        self.assertFalse(
+            any("INSERT INTO library" in q for q, _ in connection.fetchrow_calls)
+        )
+
+    async def test_fetch_paper_topic_returns_candidates_without_storing(self):
+        candidates = [{"title": "A Paper", "doi": "10.1/x", "authors": ["Ada"]}]
+        store_paper = AsyncMock()
+        with (
+            patch.object(brain.sources, "resolve", return_value=candidates),
+            patch.object(brain, "_store_paper", store_paper),
+        ):
+            result = await brain.fetch_paper(topic="bandwidth selection")
+
+        self.assertEqual(result["mode"], "topic")
+        self.assertEqual(result["candidates"], candidates)
+        store_paper.assert_not_awaited()
+
+    async def test_fetch_paper_lookup_stores_resolved_paper(self):
+        meta = {"title": "A Paper", "doi": "10.1/x"}
+        store_paper = AsyncMock(return_value={"title": "A Paper", "deduped": False})
+        with (
+            patch.object(brain.sources, "resolve", return_value=meta),
+            patch.object(brain, "_store_paper", store_paper),
+        ):
+            result = await brain.fetch_paper(identifier="10.1/x")
+
+        self.assertTrue(result["found"])
+        store_paper.assert_awaited_once()
+
+    async def test_fetch_paper_tool_formats_lookup_result(self):
+        mcp = _Mcp()
+        library_tools.register(mcp)
+        result = {
+            "mode": "lookup",
+            "found": True,
+            "title": "A Paper",
+            "authors": ["Ada Lovelace"],
+            "year": 2024,
+            "abstract_stored": True,
+            "embedded": True,
+            "deduped": False,
+        }
+        with patch.object(brain, "fetch_paper", AsyncMock(return_value=result)):
+            out = await mcp.tools["fetch_paper"](identifier="10.1/x")
+
+        self.assertIn("Fetched: A Paper", out)
+        self.assertIn("Abstract: stored and embedded", out)
+
+    async def test_store_paper_defers_embedding_when_model_unavailable(self):
+        connection = _PaperConnection(existing=None)
+        meta = {"title": "A Paper", "abstract": "The abstract.", "doi": "10.1/x"}
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(brain, "embed", AsyncMock(side_effect=RuntimeError("down"))),
+            patch.object(brain, "store_thought", AsyncMock(return_value="thought-1")),
+        ):
+            result = await brain._store_paper(meta)
+
+        self.assertTrue(result["abstract_stored"])
+        self.assertFalse(result["embedded"])
+        chunk_inserts = [
+            args
+            for query, args in connection.execute_calls
+            if "INSERT INTO chunks" in query
+        ]
+        self.assertEqual(len(chunk_inserts), 1)
+        self.assertIsNone(chunk_inserts[0][2])  # embedding arg is NULL
+
+    async def test_fetch_paper_tool_reports_deferred_embedding(self):
+        mcp = _Mcp()
+        library_tools.register(mcp)
+        result = {
+            "mode": "lookup",
+            "found": True,
+            "title": "A Paper",
+            "authors": ["Ada Lovelace"],
+            "year": 2024,
+            "abstract_stored": True,
+            "embedded": False,
+            "deduped": False,
+        }
+        with patch.object(brain, "fetch_paper", AsyncMock(return_value=result)):
+            out = await mcp.tools["fetch_paper"](identifier="10.1/x")
+
+        self.assertIn("embedding deferred", out)
+
+    async def test_backfill_embeds_null_chunks_and_counts(self):
+        connection = _BackfillConnection(
+            pending=2,
+            rows=[
+                {"id": "c1", "content": "alpha"},
+                {"id": "c2", "content": "beta"},
+            ],
+        )
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(brain, "embed", AsyncMock(return_value=[0.1, 0.2])),
+        ):
+            result = await brain.backfill_chunk_embeddings()
+
+        self.assertEqual(result["embedded"], 2)
+        self.assertEqual(result["failed"], 0)
+        self.assertEqual(result["pending_after"], 0)
+        self.assertEqual(len(connection.updates), 2)
+
+    async def test_backfill_skips_chunks_that_fail_to_embed(self):
+        connection = _BackfillConnection(
+            pending=2,
+            rows=[
+                {"id": "c1", "content": "alpha"},
+                {"id": "c2", "content": "beta"},
+            ],
+        )
+        embed = AsyncMock(side_effect=[[0.1, 0.2], RuntimeError("down")])
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(brain, "embed", embed),
+        ):
+            result = await brain.backfill_chunk_embeddings()
+
+        self.assertEqual(result["embedded"], 1)
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["pending_after"], 1)
+        self.assertEqual(len(connection.updates), 1)
 
 
 class LibrarySearchTests(unittest.IsolatedAsyncioTestCase):
@@ -456,8 +690,12 @@ class LibrarySearchTests(unittest.IsolatedAsyncioTestCase):
         matches = [{"id": "library-1", "title": "Paper"}]
         updated = {"title": "Paper", "status": "read"}
         with (
-            patch.object(brain, "find_library_records", AsyncMock(return_value=matches)),
-            patch.object(brain, "update_library_record", AsyncMock(return_value=updated)),
+            patch.object(
+                brain, "find_library_records", AsyncMock(return_value=matches)
+            ),
+            patch.object(
+                brain, "update_library_record", AsyncMock(return_value=updated)
+            ),
         ):
             result = await mcp.tools["update_library_status"]("Paper", "read")
 
@@ -498,15 +736,19 @@ class ThoughtConnectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_mcp_tool_formats_shared_metadata(self):
         mcp = _Mcp()
         search_tools.register(mcp)
-        rows = [{
-            "overlap_count": 2,
-            "preview": "Compare estimators.",
-            "shared_topics": ["causal inference"],
-            "shared_people": ["Ada"],
-            "shared_tags": [],
-            "shared_projects": [],
-        }]
-        with patch.object(brain, "get_thought_connections", AsyncMock(return_value=rows)):
+        rows = [
+            {
+                "overlap_count": 2,
+                "preview": "Compare estimators.",
+                "shared_topics": ["causal inference"],
+                "shared_people": ["Ada"],
+                "shared_tags": [],
+                "shared_projects": [],
+            }
+        ]
+        with patch.object(
+            brain, "get_thought_connections", AsyncMock(return_value=rows)
+        ):
             result = await mcp.tools["get_thought_connections"]("thought-1")
 
         self.assertIn("[2 overlap] Compare estimators.", result)
@@ -554,11 +796,11 @@ class TableStatsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Sources: claude: 3", result)
 
 
-class MaintenanceTests(unittest.IsolatedAsyncioTestCase):
-    async def test_maintenance_thoughts_excludes_synthesis_and_archived_metadata(self):
+class ExtractionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_extract_thoughts_excludes_synthesis_and_archived_metadata(self):
         connection = _FetchConnection([{"id": "thought-1"}])
         with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))):
-            rows = await brain.maintenance_thoughts(since_hours=12, limit=7)
+            rows = await brain.extract_thoughts(since_hours=12, limit=7)
 
         self.assertEqual(rows, [{"id": "thought-1"}])
         query, args = connection.calls[0]
@@ -566,7 +808,7 @@ class MaintenanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("metadata->>'archived'", query)
         self.assertEqual(args, (12, 7))
 
-    async def test_run_maintenance_writes_synthesis_then_archives_inputs(self):
+    async def test_run_extraction_writes_synthesis_then_archives_inputs(self):
         thoughts = [
             {
                 "id": "thought-1",
@@ -578,7 +820,7 @@ class MaintenanceTests(unittest.IsolatedAsyncioTestCase):
         store_thought = AsyncMock(return_value="synthesis-1")
         archive_thoughts = AsyncMock()
         with (
-            patch.object(brain, "maintenance_thoughts", AsyncMock(return_value=thoughts)),
+            patch.object(brain, "extract_thoughts", AsyncMock(return_value=thoughts)),
             patch.object(
                 brain,
                 "complete_extraction_prompt",
@@ -587,39 +829,43 @@ class MaintenanceTests(unittest.IsolatedAsyncioTestCase):
             patch.object(brain, "store_thought", store_thought),
             patch.object(brain, "archive_thoughts", archive_thoughts),
         ):
-            result = await brain.run_maintenance_once()
+            result = await brain.run_extraction_once()
 
         self.assertEqual(result, {"processed": 1, "syntheses": 1})
         store_thought.assert_awaited_once()
         content, metadata = store_thought.await_args.args
         self.assertEqual(content, "Remember Ada's estimator preference.")
         self.assertEqual(metadata["type"], "synthesis")
-        self.assertEqual(metadata["source_type"], "maintenance")
+        self.assertEqual(metadata["source_type"], "extraction")
         self.assertEqual(metadata["thought_ids"], ["thought-1"])
         archive_thoughts.assert_awaited_once_with(
-            ["thought-1"], metadata["maintenance_run_id"]
+            ["thought-1"], metadata["extraction_run_id"]
         )
 
-    async def test_preview_maintenance_returns_synthesis_without_archiving(self):
+    async def test_preview_extraction_returns_synthesis_without_archiving(self):
         thoughts = [{"id": "thought-1", "content": "A", "metadata": {}}]
         with (
-            patch.object(brain, "maintenance_thoughts", AsyncMock(return_value=thoughts)),
-            patch.object(brain, "complete_extraction_prompt", AsyncMock(return_value="Synthesis.")),
+            patch.object(brain, "extract_thoughts", AsyncMock(return_value=thoughts)),
+            patch.object(
+                brain,
+                "complete_extraction_prompt",
+                AsyncMock(return_value="Synthesis."),
+            ),
         ):
-            result = await brain.preview_maintenance_once()
+            result = await brain.preview_extraction_once()
 
         self.assertEqual(result["processed"], 1)
         self.assertEqual(result["synthesis"], "Synthesis.")
         self.assertEqual(result["thought_ids"], ["thought-1"])
 
-    async def test_apply_maintenance_uses_approved_synthesis_and_ids(self):
+    async def test_apply_extraction_uses_approved_synthesis_and_ids(self):
         store_thought = AsyncMock(return_value="synthesis-1")
         archive_thoughts = AsyncMock()
         with (
             patch.object(brain, "store_thought", store_thought),
             patch.object(brain, "archive_thoughts", archive_thoughts),
         ):
-            result = await brain.apply_maintenance_synthesis(
+            result = await brain.apply_extraction_synthesis(
                 ["thought-1"],
                 "Approved synthesis.",
             )
@@ -629,10 +875,10 @@ class MaintenanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(content, "Approved synthesis.")
         self.assertEqual(metadata["thought_ids"], ["thought-1"])
         archive_thoughts.assert_awaited_once_with(
-            ["thought-1"], metadata["maintenance_run_id"]
+            ["thought-1"], metadata["extraction_run_id"]
         )
 
-    async def test_memory_maintenance_tool_defaults_to_dry_run(self):
+    async def test_memory_extraction_tool_defaults_to_dry_run(self):
         mcp = _Mcp()
         maintenance_tools.register(mcp)
         preview = {
@@ -640,35 +886,37 @@ class MaintenanceTests(unittest.IsolatedAsyncioTestCase):
             "synthesis": "Synthesis.",
             "thought_ids": ["thought-1"],
         }
-        with patch.object(brain, "preview_maintenance_once", AsyncMock(return_value=preview)):
-            result = await mcp.tools["run_memory_maintenance"]()
+        with patch.object(
+            brain, "preview_extraction_once", AsyncMock(return_value=preview)
+        ):
+            result = await mcp.tools["run_memory_extraction"]()
 
         self.assertIn("DRY RUN", result)
         self.assertIn("thought-1", result)
 
-    async def test_memory_maintenance_apply_requires_approved_preview(self):
+    async def test_memory_extraction_apply_requires_approved_preview(self):
         mcp = _Mcp()
         maintenance_tools.register(mcp)
-        apply_maintenance = AsyncMock()
-        with patch.object(brain, "apply_maintenance_synthesis", apply_maintenance):
-            result = await mcp.tools["run_memory_maintenance"](dry_run=False)
+        apply_extraction = AsyncMock()
+        with patch.object(brain, "apply_extraction_synthesis", apply_extraction):
+            result = await mcp.tools["run_memory_extraction"](dry_run=False)
 
         self.assertIn("Run dry_run=True first", result)
-        apply_maintenance.assert_not_awaited()
+        apply_extraction.assert_not_awaited()
 
-    async def test_memory_maintenance_apply_uses_approved_preview(self):
+    async def test_memory_extraction_apply_uses_approved_preview(self):
         mcp = _Mcp()
         maintenance_tools.register(mcp)
-        apply_maintenance = AsyncMock(return_value={"processed": 1, "syntheses": 1})
-        with patch.object(brain, "apply_maintenance_synthesis", apply_maintenance):
-            result = await mcp.tools["run_memory_maintenance"](
+        apply_extraction = AsyncMock(return_value={"processed": 1, "syntheses": 1})
+        with patch.object(brain, "apply_extraction_synthesis", apply_extraction):
+            result = await mcp.tools["run_memory_extraction"](
                 dry_run=False,
                 approved_synthesis="Approved synthesis.",
                 thought_ids=["thought-1"],
             )
 
         self.assertIn("Processed 1 thought", result)
-        apply_maintenance.assert_awaited_once_with(
+        apply_extraction.assert_awaited_once_with(
             ["thought-1"],
             "Approved synthesis.",
         )
@@ -680,7 +928,7 @@ class MaintenanceTests(unittest.IsolatedAsyncioTestCase):
 
         query, args = connection.calls[0]
         self.assertIn("'archived', true", query)
-        self.assertIn("'maintenance_run_id', $2", query)
+        self.assertIn("'extraction_run_id', $2", query)
         self.assertEqual(args, (["thought-1"], "run-1"))
 
 
@@ -689,7 +937,9 @@ class BriefingTests(unittest.IsolatedAsyncioTestCase):
         follow_ups = [{"name": "Ada", "follow_up_date": "soon"}]
         people_with_follow_ups = AsyncMock(return_value=follow_ups)
         with (
-            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(_BriefingConnection()))),
+            patch.object(
+                brain, "get_pool", AsyncMock(return_value=_Pool(_BriefingConnection()))
+            ),
             patch.object(brain, "people_with_follow_ups", people_with_follow_ups),
         ):
             result = await brain.get_briefing(days=7)

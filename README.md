@@ -49,9 +49,9 @@ AI. OpenRouter and an OpenAI-compatible LiteLLM gateway are also supported.
 | OpenRouter | Configured in `config.yaml` | `OPENROUTER_API_KEY` |
 | LiteLLM | Configured in `config.yaml` | `LITELLM_API_KEY` and top-level `litellm_url` |
 
-The initial schema uses 1536-dimensional vectors to match `voyage-large-2`.
-Changing to a model with a different output dimension requires a schema change
-and re-embedding existing records.
+The schema uses 768-dimensional vectors. The configured embed model must emit
+768-dimensional output; changing to a model with a different output dimension
+requires a schema change and re-embedding existing records.
 
 Nightly maintenance uses a separate extraction chat model configured in
 `config.yaml`. That model consolidates recent raw thoughts into durable

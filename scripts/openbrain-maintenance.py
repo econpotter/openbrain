@@ -22,11 +22,17 @@ def _seconds_until(run_at: str) -> float:
 
 
 async def _run_once() -> None:
-    result = await brain.run_maintenance_once()
+    result = await brain.run_extraction_once()
     print(
-        "Maintenance complete: "
+        "Extraction complete: "
         f"{result['processed']} processed, "
         f"{result['syntheses']} synthesis thought(s) written."
+    )
+    backfill = await brain.backfill_chunk_embeddings()
+    print(
+        "Embedding backfill: "
+        f"{backfill['embedded']} embedded, {backfill['failed']} failed, "
+        f"{backfill['pending_after']} still pending."
     )
 
 

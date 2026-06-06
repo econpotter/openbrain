@@ -28,6 +28,14 @@ embed:
   # them is meaningless. If the embed model is down, fetch/ingest stores the
   # chunk text with a NULL embedding and the maintenance backfill sweep
   # (backfill_chunk_embeddings) embeds it later, once the model is back up.
+  #
+  # Task prefixes: nomic-embed-text is trained with asymmetric task prefixes.
+  # Stored text (chunks, thoughts, entities) is prefixed with document_prefix;
+  # search queries with query_prefix. Leave both empty for providers that take
+  # an input_type parameter instead (e.g. voyage, openai). Changing these shifts
+  # the vector geometry, so re-embed existing rows after editing them.
+  document_prefix: "search_document: "
+  query_prefix: "search_query: "
 
 paper_sources:
   # External sources for fetch_paper metadata/abstract lookup. `order` is the

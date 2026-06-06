@@ -292,6 +292,44 @@ class ModelFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, [0.1, 0.2])
         self.assertEqual(calls, ["primary", "fallback"])
 
+    async def test_embed_applies_task_prefixes(self):
+        embed_config = {
+            "provider": "litellm",
+            "model": "nomic",
+            "document_prefix": "search_document: ",
+            "query_prefix": "search_query: ",
+        }
+        sent = []
+
+        async def _embed(text, _config):
+            sent.append(text)
+            return [0.0]
+
+        with (
+            patch.object(brain, "_cfg", {"embed": embed_config}),
+            patch.object(brain, "_embed_with_config", _embed),
+        ):
+            await brain.embed("hello", task="document")
+            await brain.embed("hello", task="query")
+
+        self.assertEqual(sent, ["search_document: hello", "search_query: hello"])
+
+    async def test_embed_without_prefix_config_is_noop(self):
+        embed_config = {"provider": "litellm", "model": "voyage-style"}
+        sent = []
+
+        async def _embed(text, _config):
+            sent.append(text)
+            return [0.0]
+
+        with (
+            patch.object(brain, "_cfg", {"embed": embed_config}),
+            patch.object(brain, "_embed_with_config", _embed),
+        ):
+            await brain.embed("hello", task="query")
+
+        self.assertEqual(sent, ["hello"])
+
     async def test_litellm_url_comes_from_top_level_config(self):
         config = {"provider": "litellm", "model": "model"}
         with patch.object(brain, "_cfg", {"litellm_url": "http://litellm:4000"}):

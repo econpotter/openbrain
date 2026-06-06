@@ -228,7 +228,20 @@ async def _embed_with_config(text: str, config: dict) -> list[float]:
     )
 
 
-async def embed(text: str) -> list[float]:
+def _apply_task_prefix(text: str, task: str) -> str:
+    """
+    Prepend the nomic-style task prefix for `task` ("document" | "query"), read
+    from config (embed.document_prefix / embed.query_prefix). Empty/missing
+    prefixes are a no-op, so providers that use an input_type parameter instead
+    (voyage, openai) are unaffected.
+    """
+    key = "query_prefix" if task == "query" else "document_prefix"
+    prefix = _cfg["embed"].get(key, "")
+    return f"{prefix}{text}" if prefix else text
+
+
+async def embed(text: str, task: str = "document") -> list[float]:
+    text = _apply_task_prefix(text, task)
     errors = []
     for config in _configs_with_fallback(_cfg["embed"]):
         try:
@@ -246,7 +259,7 @@ async def embed(text: str) -> list[float]:
     raise RuntimeError("All embedding providers failed: " + "; ".join(errors))
 
 
-async def _embed_or_none(text: str) -> list[float] | None:
+async def _embed_or_none(text: str, task: str = "document") -> list[float] | None:
     """
     Best-effort embedding for the write path. Returns the vector on success, or
     None if the embed model is unavailable. Callers store the chunk text anyway
@@ -255,7 +268,7 @@ async def _embed_or_none(text: str) -> list[float] | None:
     different model whose vectors would be incompatible with the index.
     """
     try:
-        return await embed(text)
+        return await embed(text, task=task)
     except Exception as exc:
         logger.warning("Embedding deferred (model unavailable): %s", exc)
         return None
@@ -377,7 +390,7 @@ async def search_thoughts_vec(
     count: int = 10,
 ) -> list[dict]:
     pool = await get_pool()
-    embedding = await embed(query)
+    embedding = await embed(query, task="query")
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT * FROM match_thoughts($1, $2, $3)",
@@ -716,7 +729,7 @@ async def search_people_vec(
     query: str, threshold: float = 0.3, count: int = 10
 ) -> list[dict]:
     pool = await get_pool()
-    embedding = await embed(query)
+    embedding = await embed(query, task="query")
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT * FROM match_people($1, $2, $3)", embedding, threshold, count
@@ -781,7 +794,7 @@ async def search_projects_vec(
     query: str, threshold: float = 0.3, count: int = 10
 ) -> list[dict]:
     pool = await get_pool()
-    embedding = await embed(query)
+    embedding = await embed(query, task="query")
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT * FROM match_projects($1, $2, $3)", embedding, threshold, count
@@ -1377,7 +1390,7 @@ async def search_library_vec(
     doc_type: str | None = None,
 ) -> list[dict]:
     pool = await get_pool()
-    embedding = await embed(query)
+    embedding = await embed(query, task="query")
 
     conditions = ["c.embedding IS NOT NULL", "1 - (c.embedding <=> $1) > $2"]
     params: list = [embedding, threshold]
@@ -1484,7 +1497,7 @@ async def search_brain(
     People and projects are surfaced via the metadata bridge on matching thoughts.
     """
     pool = await get_pool()
-    embedding = await embed(query)
+    embedding = await embed(query, task="query")
     words = [w for w in re.sub(r"[^\w\s]", "", query).split() if len(w) > 2]
     fts_query = " | ".join(words) if words else query[:50]
 

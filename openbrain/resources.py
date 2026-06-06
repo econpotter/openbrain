@@ -2,7 +2,6 @@
 resources.py — read-only MCP context resources.
 """
 
-
 TOOL_GUIDE = """
 openbrain tool guide
 
@@ -19,8 +18,8 @@ Default capture:
 - Use capture_decision for decisions and rationale.
 - Use capture_project_update for milestones, blockers, constraints, and next steps.
 
-Maintenance:
-- Use run_memory_maintenance(dry_run=True) before any write/archival action.
+Extraction:
+- Use run_memory_extraction(dry_run=True) before any write/archival action.
 - Use dry_run=False only with the exact approved synthesis and source thought IDs.
 
 Remote document ingest:
@@ -35,7 +34,7 @@ openbrain schema summary
 
 thoughts:
 - Append-only memory log for notes, memories, decisions, preferences, sessions,
-  ingest events, and maintenance syntheses.
+  ingest events, and extraction syntheses.
 - Key metadata arrays: tags, topics, people, projects, action_items.
 - Structured fields include type, source_type, importance, quality_score,
   sensitivity_tier, and enriched.

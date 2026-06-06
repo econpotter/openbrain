@@ -37,7 +37,7 @@ The core abstraction is the **thought** — an append-only record of anything wo
 | **schemas/core/** | Clean SQL baseline for initializing a new openbrain database. | `schemas/core/` |
 | **Postgres + pgvector** | Storage: structured rows + vector indexes for semantic search. | (external) |
 | **Embedding provider** | Pluggable: Voyage AI, OpenRouter, or an OpenAI-compatible LiteLLM gateway. | `openbrain/brain.py` |
-| **Maintenance job** | Docker Compose service that consolidates recent raw thoughts with the configured maintenance model. | `scripts/openbrain-maintenance.py` |
+| **Maintenance job** | Docker Compose service that consolidates recent raw thoughts with the configured extraction model and backfills missing embeddings. | `scripts/openbrain-maintenance.py` |
 
 ---
 

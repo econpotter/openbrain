@@ -7,7 +7,7 @@ CREATE TABLE people (
     relationship   TEXT,             -- collaborator | author | contact | advisor
     notes          TEXT,
     metadata       JSONB DEFAULT '{}',
-    embedding      VECTOR(1536),
+    embedding      VECTOR(768),
     follow_up_date DATE,
     created_at     TIMESTAMPTZ DEFAULT now(),
     updated_at     TIMESTAMPTZ DEFAULT now()
@@ -29,7 +29,7 @@ CREATE TABLE projects (
                 CHECK (status IN ('active', 'paused', 'completed', 'archived')),
     start_date  DATE,
     metadata    JSONB DEFAULT '{}',
-    embedding   VECTOR(1536),
+    embedding   VECTOR(768),
     created_at  TIMESTAMPTZ DEFAULT now(),
     updated_at  TIMESTAMPTZ DEFAULT now()
 );

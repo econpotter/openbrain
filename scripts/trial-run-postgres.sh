@@ -67,9 +67,9 @@ docker exec --interactive "$CONTAINER_NAME" \
     psql --username openbrain --dbname openbrain --set ON_ERROR_STOP=1 <<'SQL'
 DO $$
 DECLARE
-    v_embedding VECTOR(1536) := array_fill(1.0::real, ARRAY[1536])::vector;
-    v_distant_embedding VECTOR(1536) :=
-        array_fill(-1.0::real, ARRAY[1536])::vector;
+    v_embedding VECTOR(768) := array_fill(1.0::real, ARRAY[768])::vector;
+    v_distant_embedding VECTOR(768) :=
+        array_fill(-1.0::real, ARRAY[768])::vector;
     v_first JSONB;
     v_duplicate JSONB;
     v_related JSONB;

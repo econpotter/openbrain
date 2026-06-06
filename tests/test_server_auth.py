@@ -59,7 +59,9 @@ sys.modules.setdefault("mcp.server.auth", mcp_server_auth)
 fastmcp_server = types.ModuleType("fastmcp.server")
 fastmcp_server_auth = types.ModuleType("fastmcp.server.auth")
 fastmcp_server_auth_providers = types.ModuleType("fastmcp.server.auth.providers")
-fastmcp_server_auth_providers_jwt = types.ModuleType("fastmcp.server.auth.providers.jwt")
+fastmcp_server_auth_providers_jwt = types.ModuleType(
+    "fastmcp.server.auth.providers.jwt"
+)
 
 
 class _StaticTokenVerifier:
@@ -71,7 +73,9 @@ fastmcp_server_auth_providers_jwt.StaticTokenVerifier = _StaticTokenVerifier
 sys.modules.setdefault("fastmcp.server", fastmcp_server)
 sys.modules.setdefault("fastmcp.server.auth", fastmcp_server_auth)
 sys.modules.setdefault("fastmcp.server.auth.providers", fastmcp_server_auth_providers)
-sys.modules.setdefault("fastmcp.server.auth.providers.jwt", fastmcp_server_auth_providers_jwt)
+sys.modules.setdefault(
+    "fastmcp.server.auth.providers.jwt", fastmcp_server_auth_providers_jwt
+)
 
 os.environ.setdefault("DATABASE_URL", "postgresql://test/openbrain")
 
@@ -121,7 +125,7 @@ class ServerAuthTests(unittest.TestCase):
         self.assertIn("openbrain://capture-policy", server.mcp.resources)
         self.assertIn("get_project", server.mcp.tools)
         self.assertIn("list_follow_ups", server.mcp.tools)
-        self.assertIn("run_memory_maintenance", server.mcp.tools)
+        self.assertIn("run_memory_extraction", server.mcp.tools)
 
 
 if __name__ == "__main__":

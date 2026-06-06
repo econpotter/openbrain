@@ -28,7 +28,7 @@ def register(mcp):
             "From the client machine, run:\n"
             f"scp /path/to/{filename} {result['scp_destination']}\n\n"
             "Then call:\n"
-            f"ingest_staged_document(filepath=\"{result['filepath']}\")"
+            f'ingest_staged_document(filepath="{result["filepath"]}")'
         )
 
     @mcp.tool
@@ -61,7 +61,9 @@ def register(mcp):
         """
         path = Path(filepath).expanduser().resolve()
         try:
-            result = await brain.ingest_document_pipeline(filepath, doc_type, force, bibtex, title)
+            result = await brain.ingest_document_pipeline(
+                filepath, doc_type, force, bibtex, title
+            )
         except FileNotFoundError as e:
             return str(e)
         except ValueError as e:
@@ -78,7 +80,7 @@ def register(mcp):
             msg += (
                 f"\n\nNo metadata found (no DOI detected). The record was saved with the "
                 f"filename as title. Ask the user for a BibTeX entry or a title, then call "
-                f"update_library(query=\"{result['title']}\", bibtex=...) to fix it."
+                f'update_library(query="{result["title"]}", bibtex=...) to fix it.'
             )
         return msg
 
@@ -111,6 +113,135 @@ def register(mcp):
                 "Call prepare_document_ingest first and copy the file to that path."
             )
         return await ingest_document(str(path), doc_type, force, bibtex, title)
+
+    @mcp.tool
+    async def fetch_paper(
+        identifier: str | None = None,
+        identifiers: list[str] | None = None,
+        topic: str | None = None,
+        doc_type: str = "paper",
+        sources: str | None = None,
+        force: bool = False,
+    ) -> str:
+        """
+        Fetch paper metadata and abstract from external sources, without a local file.
+
+        Three modes:
+          - Lookup: supply identifier (DOI, arXiv ID, or title/author text). Resolves
+            one paper across sources, stores it as a library record, and embeds the
+            abstract so it becomes semantically searchable via search_library.
+          - Batch: supply identifiers (a list of DOIs/arXiv IDs/titles). Each is looked
+            up and stored independently; one bad identifier does not abort the rest.
+            Returns a per-item summary.
+          - Topic: supply topic instead. Returns a ranked candidate list and stores
+            nothing — pick one and re-call with its DOI or title as identifier.
+
+        Use ingest_document instead when you have the actual PDF/text file.
+
+        Args:
+            identifier:  DOI, arXiv ID, or title/author text for known-item lookup.
+            identifiers: List of DOIs/arXiv IDs/titles for batch known-item lookup.
+            topic:       Topic/keyword query for discovery (returns candidates only).
+            doc_type:    Type label — paper | report | preprint | other.
+            sources:     Comma-separated source override (e.g. "openalex,arxiv"),
+                         otherwise uses the configured order.
+            force:       Re-fetch and replace an existing record with the same DOI.
+        """
+        if not identifier and not identifiers and not topic:
+            return "Supply identifier (DOI/arXiv/title), identifiers (list), or topic."
+        source_order = [s.strip() for s in sources.split(",")] if sources else None
+
+        if identifiers:
+            batch = await brain.fetch_papers(
+                identifiers=identifiers,
+                doc_type=doc_type,
+                source_order=source_order,
+                force=force,
+            )
+            s = batch["summary"]
+            lines = [
+                f"Batch fetch: {s['fetched']} fetched, {s['deduped']} already in "
+                f"library, {s['not_found']} not found "
+                f"(of {s['requested']} requested)."
+            ]
+            if s["abstracts_deferred"]:
+                lines.append(
+                    f"{s['abstracts_deferred']} abstract(s) stored without an "
+                    "embedding (model unavailable) — run backfill_embeddings later."
+                )
+            for r in batch["results"]:
+                ident = r["identifier"]
+                if not r.get("found"):
+                    lines.append(f"- not found: {ident}")
+                elif r.get("deduped"):
+                    lines.append(f"- already in library: {r.get('title') or ident}")
+                else:
+                    title = r.get("title") or ident
+                    if not r["abstract_stored"]:
+                        note = "no abstract"
+                    elif r.get("embedded"):
+                        note = "embedded"
+                    else:
+                        note = "embedding deferred"
+                    lines.append(f"- fetched: {title} ({note})")
+            return "\n".join(lines)
+
+        result = await brain.fetch_paper(
+            identifier=identifier,
+            topic=topic,
+            doc_type=doc_type,
+            source_order=source_order,
+            force=force,
+        )
+
+        if result["mode"] == "topic":
+            candidates = result["candidates"]
+            if not candidates:
+                return f"No candidates found for topic '{topic}'."
+            lines = [
+                f"Candidates for '{topic}' (nothing stored — re-call with a DOI/title):"
+            ]
+            for c in candidates:
+                authors = c.get("authors") or []
+                author_str = " & ".join(authors[:2]) + (
+                    " et al." if len(authors) > 2 else ""
+                )
+                header = f"- {c.get('title') or 'Untitled'}"
+                if author_str:
+                    header += f" — {author_str}"
+                if c.get("year"):
+                    header += f" ({c['year']})"
+                if c.get("doi"):
+                    header += f" doi:{c['doi']}"
+                elif c.get("arxiv_id"):
+                    header += f" arXiv:{c['arxiv_id']}"
+                lines.append(header)
+            return "\n".join(lines)
+
+        if not result["found"]:
+            return f"No paper found for '{identifier}'."
+        if result.get("deduped"):
+            return (
+                f"Already in library: {result['title']} (doi:{result['doi']}). "
+                "Use force=True to re-fetch."
+            )
+        authors = result.get("authors") or []
+        author_str = " & ".join(authors[:3]) + (" et al." if len(authors) > 3 else "")
+        msg = f"Fetched: {result['title']}"
+        if author_str:
+            msg += f" — {author_str}"
+        if result.get("year"):
+            msg += f" ({result['year']})"
+        if not result["abstract_stored"]:
+            msg += "\nAbstract: none found"
+        elif result.get("embedded"):
+            msg += "\nAbstract: stored and embedded"
+        else:
+            msg += (
+                "\nAbstract: stored, embedding deferred (model unavailable) — "
+                "run backfill_embeddings later"
+            )
+        return msg
 
     @mcp.tool
     async def ingest_directory(
@@ -182,14 +313,18 @@ def register(mcp):
             threshold: Minimum similarity score (0–1). Default 0.4.
             count:     Maximum results to return. Default 10.
         """
-        results = await brain.search_library_vec(query, threshold, count, year_min, doc_type)
+        results = await brain.search_library_vec(
+            query, threshold, count, year_min, doc_type
+        )
         if not results:
             return "No results found."
         lines = []
         for r in results:
             score = f"{r['similarity']:.2f}"
             authors = r["authors"] or []
-            author_str = " & ".join(authors[:2]) + (" et al." if len(authors) > 2 else "")
+            author_str = " & ".join(authors[:2]) + (
+                " et al." if len(authors) > 2 else ""
+            )
             header = f"[{score}] {r['title']}"
             if author_str:
                 header += f" — {author_str}"
@@ -326,7 +461,9 @@ def register(mcp):
         updated = await brain.update_library_record(str(record["id"]), updates)
         if not updated:
             return "Update failed."
-        return f"Updated: {updated['title']} [{updated['doc_type']}] — {updated['status']}"
+        return (
+            f"Updated: {updated['title']} [{updated['doc_type']}] — {updated['status']}"
+        )
 
     @mcp.tool
     async def update_library_status(query: str, status: str) -> str:
@@ -347,7 +484,9 @@ def register(mcp):
             titles = ", ".join(r["title"] for r in matches)
             return f"Multiple matches: {titles}. Please be more specific."
 
-        updated = await brain.update_library_record(str(matches[0]["id"]), {"status": status})
+        updated = await brain.update_library_record(
+            str(matches[0]["id"]), {"status": status}
+        )
         if not updated:
             return "Update failed."
         return f"Updated: {updated['title']} → {updated['status']}"

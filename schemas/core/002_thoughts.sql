@@ -6,7 +6,7 @@
 CREATE TABLE thoughts (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     content     TEXT NOT NULL,
-    embedding   VECTOR(1536),
+    embedding   VECTOR(768),
     metadata    JSONB DEFAULT '{}',
     type        TEXT NOT NULL DEFAULT 'thought',
     source_type TEXT NOT NULL DEFAULT 'unknown',
@@ -107,7 +107,7 @@ $$;
 -- and preserve the existing embedding.
 CREATE OR REPLACE FUNCTION upsert_thought(
     p_content   TEXT,
-    p_embedding VECTOR(1536),
+    p_embedding VECTOR(768),
     p_metadata  JSONB DEFAULT '{}'::jsonb,
     p_type      TEXT DEFAULT NULL
 )

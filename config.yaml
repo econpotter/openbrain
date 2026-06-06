@@ -23,9 +23,19 @@ embed:
   # Provider: voyage | openrouter | litellm
   provider: litellm
   model: moon8-embeddings
-  fallback:
-    provider: openrouter
-    model: openai/text-embedding-3-small
+  # No fallback: embeddings must always come from the same model. A different
+  # model produces vectors in a different geometry, so cosine similarity across
+  # them is meaningless. If the embed model is down, fetch/ingest stores the
+  # chunk text with a NULL embedding and the maintenance backfill sweep
+  # (backfill_chunk_embeddings) embeds it later, once the model is back up.
+
+paper_sources:
+  # External sources for fetch_paper metadata/abstract lookup. `order` is the
+  # fan-out/merge priority; `enabled` filters it. Per-call override: the
+  # fetch_paper `sources=` argument.
+  order: [openalex, crossref, semantic_scholar, arxiv]
+  enabled: [openalex, crossref, semantic_scholar, arxiv]
+  # semantic_scholar API key (optional) is read from .env: SEMANTIC_SCHOLAR_API_KEY
 
 extraction:
   # Provider: openrouter | litellm

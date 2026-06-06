@@ -9,3 +9,6 @@ dist/
 .DS_Store
 *.swp
 repomix-output.xml
+
+# Serena MCP cache
+.serena/

@@ -41,14 +41,20 @@ The default configuration is:
 litellm_url: http://litellm:4000
 
 embed:
-  provider: voyage
-  model: voyage-large-2
-  fallback:
-    provider: litellm
-    model: <1536-dimensional-embedding-model>
+  provider: litellm
+  model: <768-dimensional-embedding-model>
 ```
 
-The current schema uses `VECTOR(1536)` to match `voyage-large-2`.
+The current schema uses `VECTOR(768)`. The embed model must emit 768-dimensional
+vectors; changing the dimension requires a schema change and re-embedding.
+
+**No embed fallback.** Unlike `extraction` (LLM text generation), the `embed`
+block must **not** declare a `fallback`. Embeddings from different models live in
+different geometries, so cosine similarity across them is meaningless — a fallback
+model would write incompatible vectors into the same index. If the embed model is
+unavailable, fetch/ingest stores the chunk text with a NULL embedding and the
+maintenance backfill (`backfill_chunk_embeddings`) embeds it later with the same
+model. The fallback strategy is "defer and re-embed," not "embed with another model."
 
 Local sentence-transformers embeddings are not implemented. They may be added
 later as another provider, but they are not a supported configuration today.

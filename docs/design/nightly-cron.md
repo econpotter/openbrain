@@ -41,7 +41,7 @@ The job runs from the repository-level Docker Compose stack as the
 ## What it does not do
 
 - It does not delete raw thoughts — it marks them archived in metadata. The `thoughts` table is append-only; nothing is deleted.
-- It does not re-embed chunks or library records — that's a separate operation triggered by `refresh_all_embeddings()`.
+- It does not re-embed chunks or library records that already have embeddings — that's a separate operation triggered by `refresh_all_embeddings()`. It does, however, **fill in missing** chunk embeddings via `backfill_chunk_embeddings()`: chunks stored with a NULL embedding (because the embed model was down at fetch/ingest time) are embedded here, using idle local compute when the model is reliably up.
 - It does not run during the day — synthesis is a background batch operation, not a real-time concern.
 
 ---

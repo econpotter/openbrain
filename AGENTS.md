@@ -103,5 +103,6 @@ bash scripts/setup_db.sh
 
 - `docs/design/model-config.md` — model provider config, YAML/env split, embedding backends
 - `docs/design/ingest-pipeline.md` — document ingestion, metadata resolution, remote ingest pattern
+- `docs/design/paper-fetch.md` — fileless paper metadata/abstract fetch, pluggable sources, abstract embedding
 - `docs/design/nightly-cron.md` — nightly thought consolidation job
 - `docs/design/search.md` — hybrid vector + FTS search, fan-out, entity co-occurrence

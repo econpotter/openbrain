@@ -32,6 +32,7 @@ CREATE TABLE chunks (
     embedding   VECTOR(768),
     page        INT,
     chunk_index INT,
+    section     TEXT,                                   -- detected paper section (e.g. 'Methods'); NULL when unknown
     kind        TEXT NOT NULL DEFAULT 'body'
                 CHECK (kind IN ('body', 'abstract')),   -- 'abstract' = fetched abstract
     fts         TSVECTOR GENERATED ALWAYS AS

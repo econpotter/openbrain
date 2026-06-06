@@ -39,6 +39,7 @@ RETURNS TABLE (
     authors     TEXT[],
     year        INT,
     chunk_text  TEXT,
+    section     TEXT,
     similarity  FLOAT
 )
 LANGUAGE sql STABLE AS $$
@@ -49,6 +50,7 @@ LANGUAGE sql STABLE AS $$
         l.authors,
         l.year,
         c.content    AS chunk_text,
+        c.section,
         1 - (c.embedding <=> query_embedding) AS similarity
     FROM   chunks c
     JOIN   library l ON l.id = c.library_id

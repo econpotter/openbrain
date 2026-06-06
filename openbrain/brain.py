@@ -930,13 +930,142 @@ def _extract_doi(text: str) -> str | None:
     return m.group(1).rstrip(".,)") if m else None
 
 
-def _chunk_text(text: str, chunk_size: int = 400, overlap: int = 50) -> list[str]:
+# Canonical section names we recognize as headings. A line is treated as a
+# heading only if it is short and, after stripping any leading numbering, either
+# matches this vocabulary or is a short numbered line ("3.1 Experimental Setup").
+_HEADING_VOCAB = {
+    "abstract",
+    "introduction",
+    "background",
+    "related work",
+    "prior work",
+    "motivation",
+    "method",
+    "methods",
+    "methodology",
+    "materials and methods",
+    "approach",
+    "model",
+    "data",
+    "dataset",
+    "experiments",
+    "experimental setup",
+    "evaluation",
+    "results",
+    "findings",
+    "analysis",
+    "discussion",
+    "limitations",
+    "future work",
+    "conclusion",
+    "conclusions",
+    "references",
+    "bibliography",
+    "acknowledgment",
+    "acknowledgments",
+    "acknowledgement",
+    "acknowledgements",
+    "appendix",
+}
+
+_NUMBERED_HEADING_RE = re.compile(r"^\s*\d+(?:\.\d+)*\.?\s+\S")
+
+
+def _normalize_heading(line: str) -> str | None:
+    """
+    Return the canonical lowercased section name if `line` looks like a heading,
+    else None. Best-effort: detects a known heading vocabulary plus short
+    numbered headings, and ignores ordinary prose (too long) and numbered list
+    items that run into a sentence.
+    """
+    s = line.strip()
+    if not s or len(s.split()) > 8:
+        return None
+    body = re.sub(r"^\s*\d+(?:\.\d+)*\.?\s*", "", s).strip(" .:\t").lower()
+    if body in _HEADING_VOCAB:
+        return body
+    if _NUMBERED_HEADING_RE.match(s):
+        return body or None
+    return None
+
+
+def _split_sections(text: str) -> list[tuple[str, str]]:
+    """
+    Split `text` into (section_name, body) pairs on detected headings. Text
+    before the first heading is labeled "body". If fewer than two headings are
+    found, the whole document is returned as a single "body" section so the
+    caller falls back to plain balanced chunking.
+    """
+    sections: list[tuple[str, list[str]]] = [("body", [])]
+    heading_count = 0
+    for line in text.split("\n"):
+        name = _normalize_heading(line)
+        if name:
+            heading_count += 1
+            sections.append((name, []))
+        else:
+            sections[-1][1].append(line)
+    if heading_count < 2:
+        return [("body", text)]
+    result = []
+    for name, buf in sections:
+        body = "\n".join(buf).strip()
+        if body:
+            result.append((name, body))
+    return result or [("body", text)]
+
+
+def _rebalance(text: str, max_words: int, overlap: int) -> list[str]:
+    """
+    Split `text` into the fewest even pieces no longer than max_words, with each
+    piece overlapping the next by `overlap` words. 900 words at max_words=300
+    yields three ~300-word chunks, not 400/400/100.
+    """
     words = text.split()
-    chunks, i = [], 0
-    while i < len(words):
-        chunks.append(" ".join(words[i : i + chunk_size]))
-        i += chunk_size - overlap
-    return [c for c in chunks if c.strip()]
+    if not words:
+        return []
+    n = max(1, -(-len(words) // max_words))
+    bounds = [round(k * len(words) / n) for k in range(n + 1)]
+    chunks = []
+    for k in range(n):
+        start = bounds[k]
+        end = min(len(words), bounds[k + 1] + (overlap if k < n - 1 else 0))
+        piece = " ".join(words[start:end])
+        if piece.strip():
+            chunks.append(piece)
+    return chunks
+
+
+def _chunk_document(text: str) -> list[tuple[str | None, str]]:
+    """
+    Section-aware body chunking for file ingest. Returns (section, chunk_text)
+    pairs: split on detected sections (hard boundaries), drop configured
+    low-value sections, merge stray short sections into the previous one, then
+    even-rebalance each kept section into <= max_words chunks. `section` is None
+    for unlabeled text. Config knobs live under `chunk` in config.yaml.
+    """
+    cfg = _cfg.get("chunk", {})
+    max_words = cfg.get("max_words", 300)
+    overlap = cfg.get("overlap", 50)
+    min_section_words = cfg.get("min_section_words", 80)
+    skip = {s.lower() for s in cfg.get("skip_sections", [])}
+
+    kept: list[tuple[str, str]] = []
+    for name, body in _split_sections(text):
+        if name.lower() in skip:
+            continue
+        if len(body.split()) < min_section_words and kept:
+            prev_name, prev_body = kept[-1]
+            kept[-1] = (prev_name, f"{prev_body}\n{body}")
+        else:
+            kept.append((name, body))
+
+    out: list[tuple[str | None, str]] = []
+    for name, body in kept:
+        label = None if name == "body" else name.title()
+        for piece in _rebalance(body, max_words, overlap):
+            out.append((label, piece))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1091,20 +1220,22 @@ async def ingest_document_pipeline(
         )
     library_id = row["id"]
 
-    chunks = _chunk_text(full_text)
+    chunks = _chunk_document(full_text)
     pending = 0
-    for i, chunk_content in enumerate(chunks):
+    for i, (section, chunk_content) in enumerate(chunks):
         emb = await _embed_or_none(chunk_content)
         if emb is None:
             pending += 1
         async with pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO chunks (library_id, content, embedding, chunk_index) "
-                "VALUES ($1, $2, $3, $4)",
+                "INSERT INTO chunks "
+                "(library_id, content, embedding, chunk_index, section) "
+                "VALUES ($1, $2, $3, $4, $5)",
                 library_id,
                 chunk_content,
                 emb,
                 i,
+                section,
             )
 
     author_str = " & ".join(authors) if authors else "Unknown"
@@ -1413,7 +1544,7 @@ async def search_library_vec(
             f"""
             SELECT c.id AS chunk_id, l.id AS library_id, l.title, l.authors,
                    l.year, l.source, l.doc_type, l.status,
-                   c.content AS chunk_text,
+                   c.content AS chunk_text, c.section,
                    1 - (c.embedding <=> $1) AS similarity
             FROM chunks c
             JOIN library l ON l.id = c.library_id

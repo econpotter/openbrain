@@ -372,6 +372,8 @@ def register(mcp):
             if r["source"]:
                 header += f" [{r['source']}]"
             snippet = r["chunk_text"][:300].replace("\n", " ")
+            section = r.get("section")
+            snippet = f"[{section}] {snippet}" if section else snippet
             lines.append(f"{header}\n  {snippet}")
         return "\n\n".join(lines)
 

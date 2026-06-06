@@ -527,6 +527,72 @@ class _BackfillConnection:
         self.updates.append(args)
 
 
+class ChunkingTests(unittest.IsolatedAsyncioTestCase):
+    def test_rebalance_splits_into_even_pieces_under_max(self):
+        text = " ".join(f"w{i}" for i in range(900))
+        chunks = brain._rebalance(text, max_words=300, overlap=50)
+        # 900 / 300 -> 3 pieces, each <= 300 + overlap, never a thin tail
+        self.assertEqual(len(chunks), 3)
+        for c in chunks:
+            self.assertLessEqual(len(c.split()), 350)
+
+    def test_rebalance_short_text_is_single_chunk(self):
+        chunks = brain._rebalance("only a few words", max_words=300, overlap=50)
+        self.assertEqual(len(chunks), 1)
+
+    def test_split_sections_detects_headings_and_labels_preamble(self):
+        text = (
+            "Some opening text before any heading.\n"
+            "Introduction\n"
+            "We motivate the work here.\n"
+            "Methods\n"
+            "We describe the approach.\n"
+        )
+        sections = brain._split_sections(text)
+        names = [name for name, _ in sections]
+        self.assertEqual(names[0], "body")
+        self.assertIn("introduction", names)
+        self.assertIn("methods", names)
+
+    def test_split_sections_fewer_than_two_headings_falls_back(self):
+        text = "Introduction\nJust one heading and a lot of prose follows here."
+        sections = brain._split_sections(text)
+        self.assertEqual(len(sections), 1)
+        self.assertEqual(sections[0][0], "body")
+
+    def test_chunk_document_skips_references_and_titles_sections(self):
+        cfg = {
+            "max_words": 300,
+            "overlap": 50,
+            "min_section_words": 5,
+            "skip_sections": ["references"],
+        }
+        body = " ".join(["lorem"] * 60)
+        refs = " ".join(["citation"] * 60)
+        text = f"Introduction\n{body}\nResults\n{body}\nReferences\n{refs}\n"
+        with patch.object(brain, "_cfg", {"chunk": cfg}):
+            chunks = brain._chunk_document(text)
+        sections = {section for section, _ in chunks}
+        self.assertIn("Introduction", sections)
+        self.assertIn("Results", sections)
+        self.assertNotIn("References", sections)
+        self.assertTrue(all("citation" not in c for _, c in chunks))
+
+    def test_chunk_document_merges_stray_short_section(self):
+        cfg = {
+            "max_words": 300,
+            "overlap": 50,
+            "min_section_words": 80,
+            "skip_sections": [],
+        }
+        long_body = " ".join(["lorem"] * 100)
+        text = f"Introduction\n{long_body}\nMethods\nbrief.\n"
+        with patch.object(brain, "_cfg", {"chunk": cfg}):
+            chunks = brain._chunk_document(text)
+        # "Methods" is too short -> merged into Introduction, never its own chunk
+        self.assertNotIn("Methods", {section for section, _ in chunks})
+
+
 class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
     async def test_store_paper_inserts_record_abstract_chunk_and_event(self):
         connection = _PaperConnection(existing=None)

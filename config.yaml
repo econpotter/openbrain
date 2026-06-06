@@ -37,6 +37,19 @@ embed:
   document_prefix: "search_document: "
   query_prefix: "search_query: "
 
+chunk:
+  # Body-text chunking for file ingest (fetch_paper stores the abstract as a
+  # single chunk and ignores this). Text is split on detected section headings;
+  # each section is then divided into even pieces no longer than max_words.
+  max_words: 300
+  overlap: 50
+  # Sections shorter than this merge into the previous kept section, so a stray
+  # heading line never becomes its own thin chunk.
+  min_section_words: 80
+  # Section names (lowercased) excluded from the index — low retrieval value,
+  # high noise.
+  skip_sections: [references, bibliography, acknowledgments, acknowledgements]
+
 paper_sources:
   # External sources for fetch_paper metadata/abstract lookup. `order` is the
   # fan-out/merge priority; `enabled` filters it. Per-call override: the

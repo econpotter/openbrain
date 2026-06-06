@@ -1,16 +1,12 @@
 # AGENTS.md — openbrain
-
-Read this before doing anything else in this repository.
-
 ---
 
 ## What this repo is
 
-openbrain is a personal AI memory and knowledge base. It exposes MCP tools
-that let any AI assistant (Claude, Gemini) read and write to a Postgres
-database. MCP is the canonical agent interface. Additional interfaces may be
-added later for concrete workflows if they reuse the same core domain logic.
-See ARCHITECTURE.md for the full picture.
+openbrain is a personal AI memory and knowledge base: MCP tools over a Postgres
+database. **See ARCHITECTURE.md** for the domain model, component map, data
+flow, and design rationale. This file is the operational guide — invariants and
+how to work in the repo.
 
 ---
 
@@ -19,7 +15,8 @@ See ARCHITECTURE.md for the full picture.
 ```
 openbrain/
 ├── openbrain/         # Python package
-│   ├── brain.py       #   Core logic — embed, store, retrieve. All DB access lives here.
+│   ├── brain.py       #   Core logic — embed, store, retrieve, fetch, backfill. All DB access lives here.
+│   ├── sources.py     #   Pluggable paper-metadata backends: OpenAlex, CrossRef, Semantic Scholar, arXiv.
 │   ├── server.py      #   FastMCP server entry point.
 │   ├── cli.py         #   Ingest CLI entry point.
 │   ├── resources.py   #   Read-only MCP guidance resources.
@@ -28,17 +25,18 @@ openbrain/
 │       ├── search.py  #     search_thoughts, browse_recent, get_stats
 │       ├── library.py #     ingest_document, ingest_directory, search_library,
 │       │              #     prepare_document_ingest, ingest_staged_document,
-│       │              #     update_library, update_status
+│       │              #     fetch_paper, update_library, update_status
 │       ├── entities.py#     add_person, get_person, list_people, update_person,
 │       │              #     add_project, list_projects, update_project, refresh_embeddings,
 │       │              #     search_people, search_projects, search_by_entity, add_note
 │       ├── briefing.py#     get_briefing, search_brain
-│       └── maintenance.py
+│       └── maintenance.py # run_memory_extraction, backfill_embeddings
+├── integrations/      # Provider-agnostic assistant skill files routing requests to MCP tools.
 ├── schemas/
 │   ├── core/          # Clean install-time SQL baseline, applied in numeric order.
 │   └── optional/      # Additional capabilities evaluated after the core baseline.
 ├── scripts/           # setup_db.sh, install.sh, systemd units
-├── config.yaml        # Non-secret config: embed provider, model, library path
+├── config.yaml        # Non-secret config: embed provider, model, library path, paper sources
 ├── .env.example       # API keys and DATABASE_URL (secrets only)
 └── docs/
     ├── design/        # Per-subsystem design docs
@@ -55,6 +53,8 @@ openbrain/
 - **One `register(mcp)` per tool file.** Each file in `tools/` exports exactly one function that registers its tools with the FastMCP instance.
 - **MCP resources are read-only guidance surfaces.** Keep mutation, search, ingest, and maintenance actions behind tools.
 - **No hardcoded model providers or names.** Read model config from `config.yaml`. See `docs/design/model-config.md`.
+- **Embedding is decoupled from the write path.** Capture/ingest/fetch must persist content even when the embedding model is unavailable; rows land with a null embedding and are filled later by `backfill_embeddings`. Never let an embedding failure abort a write.
+- **Paper fetch is fileless.** `fetch_paper` resolves metadata + abstract through `sources.py` and stores a library record without a PDF on disk. Document ingest (with a file) stays separate.
 
 ---
 

@@ -29,7 +29,8 @@ The core abstraction is the **thought** — an append-only record of anything wo
 
 | Component | Responsibility | Key files |
 |-----------|---------------|-----------|
-| **brain.py** | Core logic: embed, store, retrieve. All database access. Async, uses asyncpg. | `openbrain/brain.py` |
+| **brain.py** | Core logic: embed, store, retrieve, paper fetch, embedding backfill. All database access. Async, uses asyncpg. | `openbrain/brain.py` |
+| **sources.py** | Pluggable paper-metadata backends (OpenAlex, CrossRef, Semantic Scholar, arXiv) for fileless fetch. Lookup by DOI/arXiv ID and topic search. | `openbrain/sources.py` |
 | **MCP server** | FastMCP server exposing tools and read-only resources to Claude/Gemini via stdio or HTTP. | `openbrain/server.py` |
 | **tools/** | One file per tool group; each exports a `register(mcp)` function. | `openbrain/tools/capture.py`, `openbrain/tools/search.py`, `openbrain/tools/library.py`, `openbrain/tools/entities.py`, `openbrain/tools/briefing.py`, `openbrain/tools/maintenance.py` |
 | **resources.py** | Read-only MCP guidance resources for tool choice, schema context, and capture policy. | `openbrain/resources.py` |
@@ -38,6 +39,7 @@ The core abstraction is the **thought** — an append-only record of anything wo
 | **Postgres + pgvector** | Storage: structured rows + vector indexes for semantic search. | (external) |
 | **Embedding provider** | Pluggable: Voyage AI, OpenRouter, or an OpenAI-compatible LiteLLM gateway. | `openbrain/brain.py` |
 | **Maintenance job** | Docker Compose service that consolidates recent raw thoughts with the configured extraction model and backfills missing embeddings. | `scripts/openbrain-maintenance.py` |
+| **integrations/** | Provider-agnostic assistant skill files (no new capability) that teach MCP clients how to route common requests to openbrain tools. | `integrations/` |
 
 ---
 
@@ -86,6 +88,34 @@ The staged copy is temporary. PDF bytes are stored in `LIBRARY_PATH`, not in
 Postgres. Postgres stores catalog metadata, file hashes/paths, and searchable
 text chunks.
 
+### Fileless paper fetch (via MCP)
+
+```
+fetch_paper(identifier | identifiers | topic)
+  → sources.py resolves across backends (OpenAlex, CrossRef, Semantic Scholar, arXiv)
+      identifier(s): DOI / arXiv ID / title lookup → one record each
+      topic:         search → candidate list (no write)
+  → INSERT INTO library (metadata + abstract, no file on disk)
+  → embed abstract → searchable via search_library
+      if embedding model unavailable: store with null embedding, defer to backfill
+  → batch mode: each identifier resolved independently; one failure does not abort the rest
+```
+
+Fetch is fileless: no PDF is downloaded. Document ingest (with a file) and paper
+fetch (metadata + abstract only) are separate paths into the same `library`.
+
+### Embedding backfill
+
+```
+backfill_embeddings(limit) / brain.backfill_chunk_embeddings(limit)
+  → select rows with a null embedding (thoughts, chunks, abstracts)
+  → embed and update in place
+```
+
+Embedding is decoupled from the write path: captures, ingests, and fetches
+persist content even when the embedding model is down, then `backfill_embeddings`
+fills the gaps. The maintenance job runs this on a schedule.
+
 ### Semantic search
 
 ```
@@ -128,6 +158,10 @@ get_briefing(days=N)
 - **Transport flexibility.** The MCP server runs stdio for local dev/testing and streamable HTTP for remote access from Claude.ai / Gemini. Controlled by `server.transport` in `config.yaml`.
 
 - **Metadata via CrossRef, not LLM.** Document metadata is resolved from DOI → CrossRef API, with user-supplied BibTeX and plain title as fallbacks. LLM extraction was deliberately avoided to keep ingest deterministic and cheap.
+
+- **Fileless paper fetch with pluggable sources.** `fetch_paper` stores a library record from metadata + abstract alone, no PDF. `sources.py` queries OpenAlex, CrossRef, Semantic Scholar, and arXiv in a configured order; backends are added as options, not hardcoded. This makes "remember this paper" cheap and lets the library hold references the user has not downloaded.
+
+- **Embedding decoupled from the write path.** Writes never block on the embedding model. Rows persist with a null embedding when the model is unavailable, and `backfill_embeddings` (also run by the maintenance job) fills them later. Availability of search degrades gracefully; durability of the write does not.
 
 - **Provider-agnostic model configuration.** No specific embedding model or provider is hardwired. Model backends, providers, and routing are configured via a YAML config file; API keys are kept separately in `.env`. LiteLLM is a supported routing option but not a requirement — direct provider calls are equally valid. New model backends should be added as configurable options, not hardcoded replacements.
 

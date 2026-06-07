@@ -357,7 +357,7 @@ async def refresh_all_embeddings(entity_type: str = "all") -> dict:
 
 async def store_thought(content: str, metadata: dict | None = None) -> str:
     pool = await get_pool()
-    embedding = await embed(content)
+    embedding = await _embed_or_none(content)
     meta = metadata or {}
     thought_type = meta.get("type")
     async with pool.acquire() as conn:

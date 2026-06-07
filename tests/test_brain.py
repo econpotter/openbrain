@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 import tempfile
@@ -176,6 +177,32 @@ class StoreThoughtTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args[0], "A repeated thought")
         self.assertEqual(args[3], "note")
         refresh.assert_awaited_once_with(["Ada"], ["Estimation"])
+
+    async def test_store_thought_defers_embedding_when_model_unavailable(self):
+        connection = _ThoughtConnection(
+            {"id": "thought-1", "inserted": True, "metadata_changed": False}
+        )
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(
+                brain,
+                "embed",
+                AsyncMock(side_effect=RuntimeError("All embedding providers failed")),
+            ),
+            patch.object(brain, "_refresh_mentioned_entities", AsyncMock()),
+        ):
+            thought_id = await brain.store_thought(
+                "Capture even when embeddings are down.",
+                {"type": "thought", "source": "claude"},
+            )
+
+        self.assertEqual(thought_id, "thought-1")
+        query, args = connection.calls[0]
+        self.assertIn("SELECT upsert_thought", query)
+        self.assertEqual(args[0], "Capture even when embeddings are down.")
+        self.assertIsNone(args[1])
+        self.assertEqual(json.loads(args[2])["source"], "claude")
+        self.assertEqual(args[3], "thought")
 
     async def test_identical_duplicate_does_not_refresh_entities(self):
         _, connection, refresh = await self._store(

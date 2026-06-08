@@ -655,11 +655,14 @@ async def add_person(
         )
     inserted = dict(row)
     text = await _entity_text("people", inserted)
-    emb = await embed(text)
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE people SET embedding = $1 WHERE id = $2", emb, str(inserted["id"])
-        )
+    emb = await _embed_or_none(text)
+    if emb is not None:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE people SET embedding = $1 WHERE id = $2",
+                emb,
+                str(inserted["id"]),
+            )
     return inserted
 
 
@@ -681,11 +684,14 @@ async def add_project(
         )
     inserted = dict(row)
     text = await _entity_text("projects", inserted)
-    emb = await embed(text)
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE projects SET embedding = $1 WHERE id = $2", emb, str(inserted["id"])
-        )
+    emb = await _embed_or_none(text)
+    if emb is not None:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE projects SET embedding = $1 WHERE id = $2",
+                emb,
+                str(inserted["id"]),
+            )
     return inserted
 
 
@@ -722,11 +728,12 @@ async def update_person(person_id: str, updates: dict) -> dict | None:
     if row:
         updated = dict(row)
         text = await _entity_text("people", updated)
-        emb = await embed(text)
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE people SET embedding = $1 WHERE id = $2", emb, person_id
-            )
+        emb = await _embed_or_none(text)
+        if emb is not None:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE people SET embedding = $1 WHERE id = $2", emb, person_id
+                )
         return updated
     return None
 
@@ -787,11 +794,12 @@ async def update_project(project_id: str, updates: dict) -> dict | None:
     if row:
         updated = dict(row)
         text = await _entity_text("projects", updated)
-        emb = await embed(text)
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE projects SET embedding = $1 WHERE id = $2", emb, project_id
-            )
+        emb = await _embed_or_none(text)
+        if emb is not None:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE projects SET embedding = $1 WHERE id = $2", emb, project_id
+                )
         return updated
     return None
 

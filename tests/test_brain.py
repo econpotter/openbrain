@@ -103,6 +103,35 @@ class _ExecuteConnection:
         self.calls.append((query, args))
 
 
+class _EntityConnection:
+    def __init__(self):
+        self.fetchrow_calls = []
+        self.execute_calls = []
+
+    async def fetchrow(self, query, *args):
+        self.fetchrow_calls.append((query, args))
+        if "INSERT INTO people" in query:
+            return {
+                "id": "person-1",
+                "name": args[0],
+                "affiliation": args[1],
+                "relationship": args[2],
+                "notes": args[3],
+            }
+        if "INSERT INTO projects" in query:
+            return {
+                "id": "project-1",
+                "name": args[0],
+                "description": args[1],
+                "status": args[2],
+                "start_date": args[3],
+            }
+        raise AssertionError(f"Unexpected query: {query}")
+
+    async def execute(self, query, *args):
+        self.execute_calls.append((query, args))
+
+
 class _BriefingConnection:
     async def fetch(self, query, *args):
         if "FROM projects" in query:
@@ -460,6 +489,40 @@ class ModelFallbackTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "fallback synthesis")
         self.assertEqual(calls, ["primary", "fallback"])
+
+
+class EntityWriteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_add_person_defers_embedding_when_model_unavailable(self):
+        connection = _EntityConnection()
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(brain, "embed", AsyncMock(side_effect=RuntimeError("down"))),
+        ):
+            result = await brain.add_person(
+                "Ada Lovelace",
+                affiliation="Analytical Engine",
+                relationship="contact",
+                notes="Computing pioneer.",
+            )
+
+        self.assertEqual(result["id"], "person-1")
+        self.assertEqual(result["name"], "Ada Lovelace")
+        self.assertEqual(connection.execute_calls, [])
+
+    async def test_add_project_defers_embedding_when_model_unavailable(self):
+        connection = _EntityConnection()
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(brain, "embed", AsyncMock(side_effect=RuntimeError("down"))),
+        ):
+            result = await brain.add_project(
+                "openbrain",
+                description="Personal memory MCP server.",
+            )
+
+        self.assertEqual(result["id"], "project-1")
+        self.assertEqual(result["name"], "openbrain")
+        self.assertEqual(connection.execute_calls, [])
 
 
 class IngestPipelineTests(unittest.IsolatedAsyncioTestCase):

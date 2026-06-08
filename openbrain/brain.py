@@ -215,7 +215,7 @@ async def _embed_with_config(text: str, config: dict) -> list[float]:
                 "config.yaml: litellm_url is required when embed.provider is litellm"
             )
         client = AsyncOpenAI(
-            api_key=os.environ["LITELLM_API_KEY"],
+            api_key=os.environ.get("LITELLM_API_KEY", "local-litellm"),
             base_url=litellm_url,
             timeout=EMBED_TIMEOUT,
         )
@@ -506,7 +506,13 @@ async def _complete_extraction_with_config(prompt: str, config: dict) -> str:
 
     from openai import AsyncOpenAI
 
-    client = AsyncOpenAI(api_key=os.environ[api_key_name], base_url=base_url)
+    api_key = os.environ.get(api_key_name)
+    if provider == "litellm":
+        api_key = api_key or "local-litellm"
+    if not api_key:
+        raise KeyError(api_key_name)
+
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
     result = await client.chat.completions.create(
         model=model,
         messages=[

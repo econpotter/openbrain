@@ -365,6 +365,79 @@ class ModelFallbackTests(unittest.IsolatedAsyncioTestCase):
                 "http://litellm:4000",
             )
 
+    async def test_litellm_embedding_uses_local_placeholder_key(self):
+        created = {}
+
+        class _Client:
+            def __init__(self, api_key, base_url, timeout):
+                created["api_key"] = api_key
+                created["base_url"] = base_url
+                created["timeout"] = timeout
+                self.embeddings = types.SimpleNamespace(create=self._create)
+
+            async def _create(self, input, model):
+                return types.SimpleNamespace(
+                    data=[types.SimpleNamespace(embedding=[0.1, 0.2])]
+                )
+
+        openai = types.ModuleType("openai")
+        openai.AsyncOpenAI = _Client
+
+        with (
+            patch.dict(sys.modules, {"openai": openai}),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            result = await brain._embed_with_config(
+                "test",
+                {
+                    "provider": "litellm",
+                    "model": "moon8-embeddings",
+                    "litellm_url": "http://litellm:4000",
+                },
+            )
+
+        self.assertEqual(result, [0.1, 0.2])
+        self.assertEqual(created["api_key"], "local-litellm")
+        self.assertEqual(created["base_url"], "http://litellm:4000")
+
+    async def test_litellm_extraction_uses_local_placeholder_key(self):
+        created = {}
+
+        class _Client:
+            def __init__(self, api_key, base_url):
+                created["api_key"] = api_key
+                created["base_url"] = base_url
+                completion = types.SimpleNamespace(
+                    message=types.SimpleNamespace(content="synthesis")
+                )
+                self.chat = types.SimpleNamespace(
+                    completions=types.SimpleNamespace(
+                        create=AsyncMock(
+                            return_value=types.SimpleNamespace(choices=[completion])
+                        )
+                    )
+                )
+
+        openai = types.ModuleType("openai")
+        openai.AsyncOpenAI = _Client
+
+        with (
+            patch.dict(sys.modules, {"openai": openai}),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            result = await brain._complete_extraction_with_config(
+                "prompt",
+                {
+                    "provider": "litellm",
+                    "model": "moon8-fast",
+                    "litellm_url": "http://litellm:4000",
+                },
+            )
+
+        self.assertEqual(result, "synthesis")
+        self.assertEqual(created["api_key"], "local-litellm")
+        self.assertEqual(created["base_url"], "http://litellm:4000")
+
     async def test_extraction_uses_fallback_when_primary_fails(self):
         config = {
             "provider": "litellm",

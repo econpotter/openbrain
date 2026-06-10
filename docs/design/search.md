@@ -66,3 +66,9 @@ FTS columns (`fts`) are maintained via triggers on `thoughts` and `chunks`. The 
 `search_brain` extracts co-occurring people and projects from the metadata of matching thoughts. If thought A matches the query and its metadata lists `people: ["Alice", "Bob"]`, Alice and Bob are counted as co-occurrences. The top 5 by count are returned in the `people` and `projects` keys.
 
 This surfaces relationship context without a separate entity search step.
+
+---
+
+## Graph traversal — complementary path
+
+For questions like "what's connected to X?" where co-occurrence mining is too shallow, use `get_related_entities(name, depth)` via the `links` graph. This traverses bidirectional `thought ↔ people/project` edges (relationship `'mentions'`) up to depth N, surfacing transitive connections that vector/FTS search may miss. See `docs/design/graph-traversal.md` for edge population and traversal mechanics.

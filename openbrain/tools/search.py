@@ -119,6 +119,44 @@ def register(mcp):
         return "\n\n".join(lines)
 
     @mcp.tool
+    async def get_related_entities(name: str, depth: int = 2, limit: int = 20) -> str:
+        """
+        Find people, projects, and thoughts connected to a named person or
+        project via the links graph, up to N hops away.
+
+        Use this for "who/what is connected to X" questions that go beyond
+        direct co-mentions, e.g. a person two hops away through a shared
+        project.
+
+        Args:
+            name:  Name of the person or project to start from.
+            depth: Maximum number of hops to traverse. Default 2.
+            limit: Maximum number of related entities to return. Default 20.
+        """
+        entity = await brain.resolve_entity(name)
+        if entity is None:
+            return f"No person or project found matching '{name}'."
+        if "multiple" in entity:
+            return f"Multiple matches for '{name}': {', '.join(entity['multiple'])}"
+
+        results = await brain.traverse_graph(
+            entity["table"], str(entity["id"]), depth, limit
+        )
+        if not results:
+            return f"No related entities found for {entity['name']} (depth <= {depth})."
+
+        lines = [f"## Related to {entity['name']} (depth <= {depth})", ""]
+        by_depth: dict[int, list[dict]] = {}
+        for r in results:
+            by_depth.setdefault(r["depth"], []).append(r)
+        for d in sorted(by_depth):
+            lines.append(f"Depth {d}:")
+            for r in by_depth[d]:
+                lines.append(f"  [{r['table']}] {r['label']} — {r['relationship']}")
+            lines.append("")
+        return "\n".join(lines).rstrip()
+
+    @mcp.tool
     async def get_stats() -> str:
         """
         Return row counts and grouped activity statistics for the brain database.

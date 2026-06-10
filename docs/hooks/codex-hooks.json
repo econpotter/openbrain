@@ -10,17 +10,6 @@
       ]
     }
   ],
-  "user_prompt_submit": [
-    {
-      "prompt": [
-        "openbrain context check: if this user request depends on previous",
-        "decisions, project-specific conventions, people, documents, or",
-        "unfamiliar local history, search openbrain before acting. Skip recall",
-        "for small mechanical edits or tasks whose required context is fully",
-        "available in the current conversation and repository."
-      ]
-    }
-  ],
   "pre_compact": [
     {
       "prompt": [

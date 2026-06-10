@@ -58,3 +58,7 @@ maintenance *ARGS:
 # Back up the database
 backup:
     bash scripts/backup.sh
+
+# Install openbrain hooks + skills into ~/.claude, ~/.codex, ~/.cursor
+install-integrations:
+    python scripts/install_assistant_integrations.py

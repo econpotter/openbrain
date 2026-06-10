@@ -150,3 +150,7 @@ rtk pip list            rtk pnpm install        rtk npm run <script>
 - For debugging, use raw command without rtk prefix
 - `rtk proxy <cmd>` runs command without filtering but tracks usage
 <!-- /headroom:rtk-instructions -->
+
+## Notes
+- `uv run pytest` fails with file_not_found; use `uv run python -m pytest` instead.
+- `justfile` exists at project root — prefer `just test` and `just lint` over raw pytest/ruff invocations.

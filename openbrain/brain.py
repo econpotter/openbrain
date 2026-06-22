@@ -337,6 +337,152 @@ async def _refresh_mentioned_entities(people: list[str], projects: list[str]) ->
                 pass
 
 
+async def add_link(
+    source_table: str,
+    source_id: str,
+    target_table: str,
+    target_id: str,
+    relationship: str,
+    metadata: dict | None = None,
+) -> None:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO links (source_table, source_id, target_table, target_id, relationship, metadata)
+            VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+            ON CONFLICT (source_table, source_id, target_table, target_id, relationship) DO NOTHING
+            """,
+            source_table,
+            source_id,
+            target_table,
+            target_id,
+            relationship,
+            json.dumps(metadata or {}),
+        )
+
+
+async def _link_thought_entities(
+    thought_id: str, people: list[str], projects: list[str]
+) -> None:
+    for name in people:
+        matches = await find_person_by_name(name)
+        if len(matches) == 1:
+            await add_link(
+                "thoughts", thought_id, "people", str(matches[0]["id"]), "mentions"
+            )
+    for name in projects:
+        matches = await find_project_by_name(name)
+        if len(matches) == 1:
+            await add_link(
+                "thoughts", thought_id, "projects", str(matches[0]["id"]), "mentions"
+            )
+
+
+async def backfill_links(limit: int = 1000) -> dict:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, metadata FROM thoughts
+            WHERE (metadata->'people' IS NOT NULL OR metadata->'projects' IS NOT NULL)
+              AND NOT EXISTS (
+                  SELECT 1 FROM links
+                  WHERE links.source_table = 'thoughts' AND links.source_id = thoughts.id
+              )
+            ORDER BY created_at
+            LIMIT $1
+            """,
+            limit,
+        )
+
+    processed = 0
+    linked = 0
+    for row in rows:
+        meta = row["metadata"]
+        if isinstance(meta, str):
+            meta = json.loads(meta)
+        people = meta.get("people") or []
+        projects = meta.get("projects") or []
+        if not people and not projects:
+            continue
+        before = await _count_links("thoughts", str(row["id"]))
+        await _link_thought_entities(str(row["id"]), people, projects)
+        after = await _count_links("thoughts", str(row["id"]))
+        linked += after - before
+        processed += 1
+
+    return {"processed": processed, "linked": linked}
+
+
+async def _count_links(table: str, entity_id: str) -> int:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT count(*) FROM links WHERE source_table = $1 AND source_id = $2",
+            table,
+            entity_id,
+        )
+
+
+async def traverse_graph(
+    table: str, entity_id: str, depth: int = 2, limit: int = 50
+) -> list[dict]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM traverse_links($1, $2, $3, $4)",
+            table,
+            entity_id,
+            depth,
+            limit,
+        )
+
+    results = []
+    for row in rows:
+        node_table = row["node_table"]
+        node_id = row["node_id"]
+        async with pool.acquire() as conn:
+            if node_table == "thoughts":
+                rec = await conn.fetchrow(
+                    "SELECT content FROM thoughts WHERE id = $1", node_id
+                )
+                label = rec["content"][:200] if rec else str(node_id)
+            elif node_table in ("people", "projects"):
+                rec = await conn.fetchrow(
+                    f"SELECT name FROM {node_table} WHERE id = $1", node_id
+                )
+                label = rec["name"] if rec else str(node_id)
+            else:
+                label = str(node_id)
+        results.append(
+            {
+                "table": node_table,
+                "id": str(node_id),
+                "label": label,
+                "relationship": row["relationship"],
+                "depth": row["depth"],
+            }
+        )
+    return results
+
+
+async def resolve_entity(name: str) -> dict | None:
+    person_matches = await find_person_by_name(name)
+    project_matches = await find_project_by_name(name)
+    total = len(person_matches) + len(project_matches)
+    if total == 0:
+        return None
+    if total > 1:
+        return {
+            "multiple": [r["name"] for r in person_matches]
+            + [r["name"] for r in project_matches]
+        }
+    if person_matches:
+        return {"table": "people", **dict(person_matches[0])}
+    return {"table": "projects", **dict(project_matches[0])}
+
+
 async def refresh_all_embeddings(entity_type: str = "all") -> dict:
     pool = await get_pool()
     counts: dict = {}
@@ -380,6 +526,7 @@ async def store_thought(content: str, metadata: dict | None = None) -> str:
     projects = meta.get("projects") or []
     if result["metadata_changed"] and (people or projects):
         asyncio.create_task(_refresh_mentioned_entities(people, projects))
+        asyncio.create_task(_link_thought_entities(thought_id, people, projects))
 
     return thought_id
 

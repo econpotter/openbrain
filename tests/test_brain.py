@@ -189,6 +189,7 @@ class StoreThoughtTests(unittest.IsolatedAsyncioTestCase):
             patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
             patch.object(brain, "embed", AsyncMock(return_value=[0.1, 0.2])),
             patch.object(brain, "_refresh_mentioned_entities", refresh),
+            patch.object(brain, "_link_thought_entities", AsyncMock()),
         ):
             thought_id = await brain.store_thought("A repeated thought", metadata)
             await asyncio.sleep(0)

@@ -4,12 +4,19 @@
 import argparse
 import asyncio
 from datetime import datetime, timedelta
+import logging
 from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from openbrain import brain
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger("openbrain.maintenance")
 
 
 def _seconds_until(run_at: str) -> float:
@@ -22,30 +29,35 @@ def _seconds_until(run_at: str) -> float:
 
 
 async def _run_once() -> None:
+    logger.info("Maintenance run started.")
     result = await brain.run_extraction_once()
-    print(
+    logger.info(
         "Extraction complete: "
         f"{result['processed']} processed, "
         f"{result['syntheses']} synthesis thought(s) written."
     )
     backfill = await brain.backfill_chunk_embeddings()
-    print(
-        "Embedding backfill: "
+    status = "succeeded" if backfill["failed"] == 0 else "completed with failures"
+    logger.info(
+        "Embedding backfill %s: "
         f"{backfill['embedded']} embedded, {backfill['failed']} failed, "
-        f"{backfill['pending_after']} still pending."
+        f"{backfill['pending_after']} still pending "
+        f"(of {backfill['pending_before']} before this run).",
+        status,
     )
+    logger.info("Maintenance run complete.")
 
 
 async def _run_loop() -> None:
     run_at = brain.EXTRACTION_CONFIG.get("run_at", "02:00")
     while True:
         wait_seconds = _seconds_until(run_at)
-        print(f"Next maintenance run at {run_at}; sleeping {wait_seconds:.0f}s.")
+        logger.info("Next maintenance run at %s; sleeping %.0fs.", run_at, wait_seconds)
         await asyncio.sleep(wait_seconds)
         try:
             await _run_once()
         except Exception as exc:
-            print(f"Maintenance failed: {exc}")
+            logger.exception("Maintenance failed: %s", exc)
         await asyncio.sleep(60)
 
 

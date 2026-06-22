@@ -12,15 +12,28 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+STACK_DIR="$(dirname "$PROJECT_DIR")"
 
-# Load .env
+# Load .env. Standalone installs keep secrets in openbrain/.env; the Docker
+# stack keeps them one directory up, next to docker-compose.yaml.
+ENV_FILE=""
 if [ -f "$PROJECT_DIR/.env" ]; then
+    ENV_FILE="$PROJECT_DIR/.env"
+elif [ -f "$STACK_DIR/.env" ]; then
+    ENV_FILE="$STACK_DIR/.env"
+fi
+
+if [ -n "$ENV_FILE" ]; then
     set -o allexport
-    source "$PROJECT_DIR/.env"
+    source "$ENV_FILE"
     set +o allexport
 else
-    echo "ERROR: .env not found at $PROJECT_DIR/.env"
+    echo "ERROR: .env not found at $PROJECT_DIR/.env or $STACK_DIR/.env"
     exit 1
+fi
+
+if [ -z "${DATABASE_URL:-}" ] && [ -n "${POSTGRES_PASSWORD:-}" ]; then
+    DATABASE_URL="postgresql://openbrain:${POSTGRES_PASSWORD}@127.0.0.1:5432/openbrain"
 fi
 
 PYTHON="$PROJECT_DIR/.venv/bin/python"
@@ -58,7 +71,21 @@ mkdir -p "$BACKUP_DIR"
 # ── Database ──────────────────────────────────────────────────────────────────
 echo "Backing up database..."
 DB_FILE="$BACKUP_DIR/openbrain_${TIMESTAMP}.sql.gz"
-pg_dump "$DATABASE_URL" | gzip > "$DB_FILE"
+RUNNING_POSTGRES=""
+if [ -f "$STACK_DIR/docker-compose.yaml" ] && command -v docker >/dev/null 2>&1; then
+    RUNNING_POSTGRES="$(docker compose -f "$STACK_DIR/docker-compose.yaml" ps --status running --quiet postgres 2>/dev/null || true)"
+fi
+
+if [ -n "$RUNNING_POSTGRES" ]; then
+    docker compose -f "$STACK_DIR/docker-compose.yaml" exec -T postgres \
+        pg_dump -U openbrain -d openbrain | gzip > "$DB_FILE"
+else
+    if [ -z "${DATABASE_URL:-}" ]; then
+        echo "ERROR: DATABASE_URL is not set and POSTGRES_PASSWORD is unavailable."
+        exit 1
+    fi
+    pg_dump "$DATABASE_URL" | gzip > "$DB_FILE"
+fi
 echo "  → $DB_FILE"
 
 # ── Library files ─────────────────────────────────────────────────────────────

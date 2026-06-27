@@ -1282,5 +1282,79 @@ class BriefingTests(unittest.IsolatedAsyncioTestCase):
         people_with_follow_ups.assert_awaited_once_with(within_days=7)
 
 
+class LibraryPathOverrideTest(unittest.TestCase):
+    """The container mounts the library at a different path than the host.
+
+    config.yaml stores the host-side path (used by scripts/backup.sh); the
+    server reads OPENBRAIN_LIBRARY_PATH so document ingest writes to the path
+    that is actually mounted inside the container.
+    """
+
+    def _reload_brain(self):
+        import importlib
+
+        importlib.reload(brain)
+        # Restore the module to its config-driven state for other tests.
+        self.addCleanup(self._reload_clean)
+
+    def _reload_clean(self):
+        import importlib
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("OPENBRAIN_LIBRARY_PATH", None)
+            importlib.reload(brain)
+
+    def test_env_override_takes_precedence_over_config(self):
+        with patch.dict(
+            os.environ, {"OPENBRAIN_LIBRARY_PATH": "/data/openbrain/library"}
+        ):
+            self._reload_brain()
+            self.assertEqual(brain.LIBRARY_PATH, Path("/data/openbrain/library"))
+
+    def test_falls_back_to_config_when_env_unset(self):
+        env = {k: v for k, v in os.environ.items() if k != "OPENBRAIN_LIBRARY_PATH"}
+        with patch.dict(os.environ, env, clear=True):
+            self._reload_brain()
+            self.assertEqual(brain.LIBRARY_PATH, Path(brain._cfg["library_path"]))
+
+
+class LibraryPathOverrideCopyTargetTest(unittest.IsolatedAsyncioTestCase):
+    async def test_copy_target_uses_overridden_library_path(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            mount = Path(tempdir) / "data" / "openbrain" / "library"
+            with patch.dict(os.environ, {"OPENBRAIN_LIBRARY_PATH": str(mount)}):
+                import importlib
+
+                importlib.reload(brain)
+            self.addCleanup(self._reload_clean)
+
+            source = Path(tempdir) / "paper.txt"
+            source.write_text("Short paper text.")
+            connection = _IngestConnection()
+            with (
+                patch.object(
+                    brain, "get_pool", AsyncMock(return_value=_Pool(connection))
+                ),
+                patch.object(brain, "embed", AsyncMock(return_value=[0.1, 0.2])),
+                patch.object(
+                    brain, "store_thought", AsyncMock(return_value="thought-1")
+                ),
+            ):
+                result = await brain.ingest_document_pipeline(
+                    str(source),
+                    title="A Paper",
+                )
+
+            dest = Path(result["filepath"])
+            self.assertEqual(dest.parent, mount)
+            self.assertTrue(dest.exists())
+
+    def _reload_clean(self):
+        import importlib
+
+        os.environ.pop("OPENBRAIN_LIBRARY_PATH", None)
+        importlib.reload(brain)
+
+
 if __name__ == "__main__":
     unittest.main()

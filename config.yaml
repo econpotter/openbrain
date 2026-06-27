@@ -1,6 +1,10 @@
 # Non-secret configuration for openbrain.
 # API keys and DATABASE_URL go in .env — not here.
 
+# Host-side library path: where scripts/backup.sh (run on the host) finds the
+# files. When the server runs inside the Docker container the same files are
+# bind-mounted at a different path; set OPENBRAIN_LIBRARY_PATH there to override
+# this value (the Dockerfile sets it to /data/openbrain/library).
 library_path: /mnt/data/openbrain/library
 backup_path: /mnt/data/openbrain/backup
 litellm_url: http://litellm:4000

@@ -50,7 +50,15 @@ def _load_config() -> dict:
 _cfg = _load_config()
 
 DATABASE_URL: str = os.environ["DATABASE_URL"]
-LIBRARY_PATH: Path = Path(_cfg["library_path"]).expanduser()
+# library_path in config.yaml is the host-side path (used by scripts/backup.sh,
+# which runs on the host). Inside the Docker container the same files are bind-
+# mounted at a different path, so the server reads OPENBRAIN_LIBRARY_PATH when
+# set and falls back to config.yaml otherwise. Without this override the server
+# would try to write ingested documents to the host path inside the container,
+# which is not mounted there and fails with EACCES.
+LIBRARY_PATH: Path = Path(
+    os.environ.get("OPENBRAIN_LIBRARY_PATH") or _cfg["library_path"]
+).expanduser()
 INGEST_CONFIG: dict = _cfg.get("ingest", {})
 INGEST_STAGING_PATH: Path = Path(
     INGEST_CONFIG.get("staging_path", "/tmp/openbrain-ingest")

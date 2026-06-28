@@ -17,6 +17,7 @@ import shutil
 import socket
 import urllib.request
 import urllib.error
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import asyncpg
@@ -26,6 +27,7 @@ import yaml
 from dotenv import load_dotenv
 
 from openbrain import sources
+from openbrain import venues as venues_mod
 
 load_dotenv()
 
@@ -1537,6 +1539,80 @@ async def _store_paper(
     }
 
 
+async def store_acquired_paper(meta: dict, *, force: bool = False) -> dict:
+    """
+    Store a paper acquired by the deterministic acquire pipeline. Like
+    _store_paper, but keeps the RAW venue name in `source` (no `_source_slug`)
+    and carries the acquire columns (issn, venue_source_id, venue_abbrev,
+    concepts). Deduplicates by DOI. The abstract is embedded as a chunk through
+    the existing _embed_or_none deferral path. No ingest_event thought is emitted
+    — bulk acquisition would flood the append-only thought log.
+
+    Returns {id, title, embedded, deduped}.
+    """
+    pool = await get_pool()
+    doi = meta.get("doi")
+    if doi:
+        async with pool.acquire() as conn:
+            existing = await conn.fetchrow(
+                "SELECT id, title FROM library WHERE doi = $1", doi
+            )
+        if existing and not force:
+            return {
+                "id": str(existing["id"]),
+                "title": existing["title"],
+                "embedded": False,
+                "deduped": True,
+            }
+        if existing and force:
+            async with pool.acquire() as conn:
+                await conn.execute("DELETE FROM library WHERE id = $1", existing["id"])
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO library
+                (title, authors, year, source, doc_type, abstract, doi, bibtex,
+                 issn, venue_source_id, venue_abbrev, concepts)
+            VALUES ($1, $2, $3, $4, 'paper', $5, $6, $7, $8, $9, $10, $11)
+            RETURNING id, title
+            """,
+            meta.get("title"),
+            meta.get("authors") or [],
+            meta.get("year"),
+            meta.get("source"),  # RAW venue name — NOT slugged
+            meta.get("abstract"),
+            doi,
+            meta.get("bibtex"),
+            meta.get("issn") or meta.get("issn_l"),
+            meta.get("venue_source_id"),
+            meta.get("venue_abbrev"),
+            meta.get("concepts") or [],
+        )
+    library_id = row["id"]
+
+    embedded = False
+    abstract = meta.get("abstract")
+    if abstract:
+        emb = await _embed_or_none(abstract)
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO chunks (library_id, content, embedding, chunk_index, kind) "
+                "VALUES ($1, $2, $3, 0, 'abstract')",
+                library_id,
+                abstract,
+                emb,
+            )
+        embedded = emb is not None
+
+    return {
+        "id": str(library_id),
+        "title": row["title"],
+        "embedded": embedded,
+        "deduped": False,
+    }
+
+
 async def fetch_paper(
     identifier: str | None = None,
     topic: str | None = None,
@@ -2027,3 +2103,365 @@ async def table_stats() -> dict:
     if isinstance(stats, str):
         stats = json.loads(stats)
     return dict(stats)
+
+
+# ---------------------------------------------------------------------------
+# Acquire subsystem — venue registry, structured query, coverage, saved
+# queries, bibtex export. All deterministic; no LLM.
+# ---------------------------------------------------------------------------
+
+_SORT_COLUMNS = {"year", "created_at", "title"}
+
+
+async def seed_venues() -> int:
+    """Seed the venues table from venues.toml. Idempotent."""
+    pool = await get_pool()
+    return await venues_mod.seed_db(pool)
+
+
+async def query_library_struct(
+    *,
+    venue: str | None = None,
+    kind: str | None = None,
+    year_min: int | None = None,
+    year_max: int | None = None,
+    status: str | None = None,
+    concept: str | None = None,
+    has_abstract: bool | None = None,
+    sort: str = "year",
+    limit: int = 50,
+) -> list[dict]:
+    """Exact structured query over the library. `kind` joins the venues table;
+    `venue` filters on the canonical venue_abbrev; `concept` matches the GIN
+    concepts array. Sort column is whitelisted against injection."""
+    clauses: list[str] = []
+    params: list = []
+
+    def add(cond: str, val) -> None:
+        params.append(val)
+        clauses.append(cond.format(n=len(params)))
+
+    if venue is not None:
+        add("l.venue_abbrev = ${n}", venue)
+    if kind is not None:
+        add("v.kind = ${n}", kind)
+    if year_min is not None:
+        add("l.year >= ${n}", year_min)
+    if year_max is not None:
+        add("l.year <= ${n}", year_max)
+    if status is not None:
+        add("l.status = ${n}", status)
+    if concept is not None:
+        add("${n} = ANY(l.concepts)", concept)
+    if has_abstract is True:
+        clauses.append("l.abstract IS NOT NULL")
+    elif has_abstract is False:
+        clauses.append("l.abstract IS NULL")
+
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    sort_col = sort if sort in _SORT_COLUMNS else "year"
+    order_dir = "ASC" if sort_col == "title" else "DESC"
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT l.id, l.title, l.authors, l.year, l.source, l.venue_abbrev,
+                   l.issn, l.doc_type, l.status, l.doi, l.bibtex, l.concepts,
+                   l.abstract
+            FROM library l
+            LEFT JOIN venues v ON v.abbrev = l.venue_abbrev
+            {where}
+            ORDER BY l.{sort_col} {order_dir} NULLS LAST
+            LIMIT {int(limit)}
+            """,
+            *params,
+        )
+    return [dict(r) for r in rows]
+
+
+async def coverage_stats(
+    *, venue: str | None = None, concept: str | None = None
+) -> list[dict]:
+    """Counts grouped by publication year, optionally filtered by venue/concept."""
+    clauses: list[str] = []
+    params: list = []
+    if venue is not None:
+        params.append(venue)
+        clauses.append(f"venue_abbrev = ${len(params)}")
+    if concept is not None:
+        params.append(concept)
+        clauses.append(f"${len(params)} = ANY(concepts)")
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"SELECT year, count(*) AS n FROM library{where} "
+            "GROUP BY year ORDER BY year",
+            *params,
+        )
+    return [dict(r) for r in rows]
+
+
+async def list_registry_venues(
+    *, field: str | None = None, kind: str | None = None
+) -> list[dict]:
+    """The seeded + discovered venues registry."""
+    clauses: list[str] = []
+    params: list = []
+    if field is not None:
+        params.append(field)
+        clauses.append(f"field = ${len(params)}")
+    if kind is not None:
+        params.append(kind)
+        clauses.append(f"kind = ${len(params)}")
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"SELECT abbrev, full_name, field, kind, issn_l, source_id, origin "
+            f"FROM venues{where} ORDER BY abbrev",
+            *params,
+        )
+    return [dict(r) for r in rows]
+
+
+async def list_unknown_venues(limit: int = 50) -> list[dict]:
+    """Uncategorized venues seen during acquisition (venue_abbrev IS NULL),
+    ranked by frequency — the auto-grow promotion surface (§4)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT source AS name, issn, venue_source_id AS source_id,
+                   count(*) AS n
+            FROM library
+            WHERE venue_abbrev IS NULL
+              AND (source IS NOT NULL OR issn IS NOT NULL
+                   OR venue_source_id IS NOT NULL)
+            GROUP BY source, issn, venue_source_id
+            ORDER BY n DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+    return [dict(r) for r in rows]
+
+
+async def delete_library_record(query: str) -> dict:
+    """Resolve a single library record by query and delete it. Refuses when the
+    query is ambiguous (multiple matches) or matches nothing."""
+    matches = await find_library_records(query)
+    if not matches:
+        return {"deleted": 0, "reason": "no match"}
+    if len(matches) > 1:
+        return {"deleted": 0, "multiple": [r["title"] for r in matches]}
+    rec = matches[0]
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM library WHERE id = $1", rec["id"])
+    return {"deleted": 1, "id": str(rec["id"]), "title": rec["title"]}
+
+
+# --- bibtex export ---------------------------------------------------------
+
+
+def _last_name(name: str) -> str:
+    name = (name or "").strip()
+    if not name:
+        return "Unknown"
+    if "," in name:
+        return name.split(",")[0].strip()
+    return name.split()[-1]
+
+
+def citekey(authors: list[str], year: int | None, venue_abbrev: str | None) -> str:
+    """Stable citekey: <L1>-[<L2>|ETAL]-<YEAR>-<VENUE>."""
+    venue = venue_abbrev or "NA"
+    if not authors:
+        lead = "Unknown"
+    elif len(authors) <= 2:
+        lead = "-".join(_last_name(a) for a in authors)
+    else:
+        lead = f"{_last_name(authors[0])}-ETAL"
+    return f"{lead}-{year or 'nd'}-{venue}"
+
+
+def _rekey_bibtex(bibtex: str, key: str) -> str:
+    return re.sub(r"(@\w+\s*\{)[^,]*,", rf"\g<1>{key},", bibtex, count=1)
+
+
+def _render_bibtex(rec: dict, key: str) -> str:
+    fields = []
+    if rec.get("title"):
+        fields.append(f"  title = {{{rec['title']}}}")
+    authors = rec.get("authors") or []
+    if authors:
+        fields.append("  author = {" + " and ".join(authors) + "}")
+    if rec.get("year"):
+        fields.append(f"  year = {{{rec['year']}}}")
+    if rec.get("source"):
+        fields.append(f"  journal = {{{rec['source']}}}")
+    if rec.get("doi"):
+        fields.append(f"  doi = {{{rec['doi']}}}")
+    return f"@article{{{key},\n" + ",\n".join(fields) + "\n}"
+
+
+async def export_bibtex_records(
+    *, venue: str | None = None, year_min: int | None = None, status: str | None = None
+) -> str:
+    """Concatenated .bib for the matching library rows. Prefers each row's stored
+    bibtex blob (re-keyed to the stable citekey), else renders a minimal entry.
+    Citekey collisions get appended letters."""
+    rows = await query_library_struct(
+        venue=venue, year_min=year_min, status=status, limit=10000
+    )
+    seen: dict[str, int] = {}
+    out: list[str] = []
+    for rec in rows:
+        key = citekey(
+            rec.get("authors") or [], rec.get("year"), rec.get("venue_abbrev")
+        )
+        if key in seen:
+            seen[key] += 1
+            key = f"{key}{chr(ord('a') + seen[key] - 1)}"
+        else:
+            seen[key] = 0
+        blob = rec.get("bibtex")
+        out.append(_rekey_bibtex(blob, key) if blob else _render_bibtex(rec, key))
+    return "\n\n".join(out)
+
+
+# --- saved queries + incremental harvest -----------------------------------
+
+_CADENCE_INTERVAL = {
+    "nightly": timedelta(days=1),
+    "weekly": timedelta(days=7),
+    "monthly": timedelta(days=30),
+}
+
+
+async def save_query(
+    name: str,
+    query: str,
+    *,
+    venues: list[str] | None = None,
+    since: int | None = None,
+    min_overlap: int = 2,
+    cadence: str = "weekly",
+) -> dict:
+    """Create or update (upsert on name) a saved acquisition query."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO saved_queries (name, query, venues, since, min_overlap, cadence)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (name) DO UPDATE SET
+                query = EXCLUDED.query, venues = EXCLUDED.venues,
+                since = EXCLUDED.since, min_overlap = EXCLUDED.min_overlap,
+                cadence = EXCLUDED.cadence
+            RETURNING id, name, query, venues, since, min_overlap, cadence
+            """,
+            name,
+            query,
+            venues,
+            since,
+            min_overlap,
+            cadence,
+        )
+    return dict(row)
+
+
+async def update_query(name: str, **fields) -> dict | None:
+    allowed = {"query", "venues", "since", "min_overlap", "cadence"}
+    updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    if not updates:
+        return None
+    set_clause = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(updates))
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"UPDATE saved_queries SET {set_clause} WHERE name = $1 "
+            "RETURNING id, name, query, venues, since, min_overlap, cadence",
+            name,
+            *updates.values(),
+        )
+    return dict(row) if row else None
+
+
+async def list_queries() -> list[dict]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, name, query, venues, since, min_overlap, cadence, "
+            "harvested_through, last_run, last_yield FROM saved_queries ORDER BY name"
+        )
+    return [dict(r) for r in rows]
+
+
+async def delete_query(name: str) -> dict:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute("DELETE FROM saved_queries WHERE name = $1", name)
+    return {"deleted": result}
+
+
+async def _acquire_for_saved(query: str, **kwargs) -> dict:
+    """Seam over acquire.acquire (imported lazily to avoid an import cycle), so
+    run_saved_query can be unit-tested by patching this function."""
+    from openbrain import acquire as acquire_mod
+
+    return await acquire_mod.acquire(query, **kwargs)
+
+
+async def run_saved_query(name: str) -> dict:
+    """Run one saved query incrementally: acquire from_created_date =
+    harvested_through, then advance the watermark to the batch-max created_date
+    observed (NOT wall-clock run time)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        q = await conn.fetchrow("SELECT * FROM saved_queries WHERE name = $1", name)
+    if not q:
+        return {"error": f"no saved query named {name!r}"}
+
+    venues_filter = set(q["venues"]) if q["venues"] else None
+    from_created = (
+        q["harvested_through"].isoformat() if q["harvested_through"] else None
+    )
+    report = await _acquire_for_saved(
+        q["query"],
+        venues_filter=venues_filter,
+        since=q["since"],
+        min_overlap=q["min_overlap"] or 2,
+        from_created_date=from_created,
+    )
+    max_created = report.get("max_created_date")
+    yield_summary = json.dumps(
+        {"found": report.get("found"), "stored": report.get("stored")}
+    )
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE saved_queries SET "
+            "harvested_through = COALESCE($2::timestamptz, harvested_through), "
+            "last_run = now(), last_yield = $3 WHERE name = $1",
+            name,
+            max_created,
+            yield_summary,
+        )
+    return report
+
+
+async def due_saved_queries() -> list[dict]:
+    """Saved queries whose cadence interval has elapsed since last_run (or which
+    have never run)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT name, cadence, last_run FROM saved_queries")
+    now = datetime.now(timezone.utc)
+    due = []
+    for r in rows:
+        interval = _CADENCE_INTERVAL.get(r["cadence"], timedelta(days=7))
+        if r["last_run"] is None or (now - r["last_run"]) >= interval:
+            due.append(dict(r))
+    return due

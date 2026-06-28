@@ -12,7 +12,7 @@ import sys
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent))
 
-from openbrain import brain
+from openbrain import brain  # noqa: E402 — after sys.path bootstrap above
 
 logging.basicConfig(
     level=logging.INFO,
@@ -77,6 +77,20 @@ async def _run_once() -> None:
         f"(of {backfill['pending_before']} before this run).",
         status,
     )
+
+    due = await brain.due_saved_queries()
+    for q in due:
+        try:
+            report = await brain.run_saved_query(q["name"])
+            logger.info(
+                "Saved query %s: %s found, %s stored.",
+                q["name"],
+                report.get("found"),
+                report.get("stored"),
+            )
+        except Exception as exc:
+            logger.exception("Saved query %s failed: %s", q["name"], exc)
+
     logger.info("Maintenance run complete.")
 
 

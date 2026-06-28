@@ -1,9 +1,0 @@
-[Unit]
-Description=Daily openbrain backup
-
-[Timer]
-OnCalendar=daily
-Persistent=true
-
-[Install]
-WantedBy=timers.target

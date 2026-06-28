@@ -18,6 +18,7 @@ from openbrain.tools import (
     briefing,
     maintenance,
     acquire,
+    findings,
 )
 
 
@@ -67,6 +68,7 @@ entities.register(mcp)
 briefing.register(mcp)
 maintenance.register(mcp)
 acquire.register(mcp)
+findings.register(mcp)
 resources.register(mcp)
 
 

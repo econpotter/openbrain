@@ -78,6 +78,18 @@ async def _run_once() -> None:
         status,
     )
 
+    from openbrain import findings
+
+    fb = await findings.backfill_findings()
+    fb_status = "succeeded" if fb["failed"] == 0 else "completed with failures"
+    logger.info(
+        "Findings backfill %s: "
+        f"{fb['extracted_papers']} papers extracted, {fb['failed']} failed, "
+        f"{fb['pending_after']} still pending "
+        f"(of {fb['pending_before']} before this run).",
+        fb_status,
+    )
+
     logger.info("Maintenance run complete.")
 
 

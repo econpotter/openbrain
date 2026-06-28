@@ -21,6 +21,8 @@ CREATE TABLE library (
     venue_source_id TEXT,        -- OpenAlex source id (S…); issn-equivalent for issn-less venues
     venue_abbrev    TEXT,        -- registry-canonical abbrev e.g. 'AJAE','ARXIV'; NULL = uncategorized
     concepts        TEXT[],      -- OpenAlex concepts ∪ Crossref subjects ∪ source keywords
+    findings_status TEXT DEFAULT 'pending'   -- second-derivation status: zero findings != unprocessed
+                    CHECK (findings_status IN ('pending','done','error')),
     created_at  TIMESTAMPTZ DEFAULT now()
 );
 

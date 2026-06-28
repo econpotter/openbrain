@@ -19,11 +19,12 @@ what order) is owned by brain.py and passed in via the `order` argument.
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from typing import Callable, TypedDict
+from typing import Callable, TypedDict, TypeVar
 
 _UA = {"User-Agent": "OpenBrain/1.0 (mailto:open-brain@localhost)"}
 _TIMEOUT = 10
@@ -43,6 +44,14 @@ class PaperMeta(TypedDict, total=False):
     bibtex: str | None
     url: str | None
     source_name: str  # which backend produced this record
+    issn_l: str | None  # journal venue key (OpenAlex issn_l / Crossref ISSN)
+    venue_source_id: (
+        str | None
+    )  # OpenAlex source id (S…), issn-equivalent for issn-less venues
+    concepts: list[str]  # OpenAlex concepts ∪ Crossref subjects ∪ source keywords
+    created_date: (
+        str | None
+    )  # source-index created date (ISO); incremental-harvest watermark
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +82,26 @@ def _normalize_arxiv(identifier: str) -> str | None:
 # ---------------------------------------------------------------------------
 # HTTP helpers
 # ---------------------------------------------------------------------------
+
+
+_T = TypeVar("_T")
+
+
+def _with_retry(
+    fn: Callable[[], _T], *, attempts: int = 3, base_delay: float = 1.0
+) -> _T:
+    """Call `fn`, retrying with exponential backoff on transient failures (e.g.
+    HTTP 429). Re-raises the last exception after `attempts` tries."""
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001 — transient network errors, retried
+            last_exc = exc
+            if attempt < attempts - 1:
+                time.sleep(base_delay * (2**attempt))
+    assert last_exc is not None
+    raise last_exc
 
 
 def _get_json(url: str, headers: dict | None = None) -> dict | None:
@@ -127,6 +156,12 @@ def _openalex_record(work: dict) -> PaperMeta:
     doi = work.get("doi")
     if doi:
         doi = doi.replace("https://doi.org/", "")
+    source_id = venue.get("id")
+    if source_id:
+        source_id = source_id.replace("https://openalex.org/", "")
+    concepts = [
+        c["display_name"] for c in work.get("concepts", []) if c.get("display_name")
+    ]
     return PaperMeta(
         title=work.get("display_name"),
         authors=authors,
@@ -140,6 +175,10 @@ def _openalex_record(work: dict) -> PaperMeta:
         bibtex=None,
         url=work.get("id"),
         source_name="openalex",
+        issn_l=venue.get("issn_l"),
+        venue_source_id=source_id,
+        concepts=concepts,
+        created_date=work.get("created_date"),
     )
 
 
@@ -165,6 +204,85 @@ def openalex_search(query: str, limit: int = 10) -> list[PaperMeta]:
     if not data:
         return []
     return [_openalex_record(w) for w in data.get("results", [])]
+
+
+def openalex_search_paged(
+    query: str,
+    *,
+    issns: list[str] | None = None,
+    since: int | None = None,
+    from_created_date: str | None = None,
+    limit: int = 50,
+    per_page: int = 200,
+) -> tuple[list[PaperMeta], bool]:
+    """
+    Cursor-paginated OpenAlex search with API-side filters for the acquire
+    pipeline. Filters (`issns`, `since`, `from_created_date`) are pushed into the
+    OpenAlex `filter=` parameter rather than applied client-side.
+
+    `issns` restricts to those journal ISSN-Ls (the registry resolves
+    venue_abbrev → issns before calling). Returns `(records, truncated)`; the
+    `truncated` flag is True when matches remained past `limit` — never a silent
+    cut. OpenAlex caps `per-page` at 200.
+    """
+    filters = []
+    if issns:
+        filters.append("primary_location.source.issn:" + "|".join(issns))
+    if since:
+        filters.append(f"from_publication_date:{since}-01-01")
+    if from_created_date:
+        filters.append(f"from_created_date:{from_created_date}")
+
+    q = urllib.parse.quote(query)
+    per_page = min(per_page, 200)
+    records: list[PaperMeta] = []
+    cursor: str | None = "*"
+    truncated = False
+
+    while cursor:
+        url = (
+            f"https://api.openalex.org/works?search={q}&per-page={per_page}"
+            f"&cursor={urllib.parse.quote(cursor)}&mailto=open-brain@localhost"
+        )
+        if filters:
+            url += "&filter=" + urllib.parse.quote(",".join(filters))
+        data = _with_retry(lambda: _get_json(url))
+        if not data:
+            break
+        results = data.get("results", [])
+        records.extend(_openalex_record(w) for w in results)
+        cursor = (data.get("meta") or {}).get("next_cursor")
+        if len(records) >= limit:
+            truncated = bool(cursor) or len(records) > limit
+            break
+        if not results:
+            break
+
+    return records[:limit], truncated
+
+
+def openalex_concepts(term: str, limit: int = 25) -> list[dict]:
+    """Look up OpenAlex concepts matching `term`, with work counts, so an agent
+    can expand a query with real index vocabulary instead of guessed synonyms."""
+    q = urllib.parse.quote(term)
+    data = _get_json(
+        f"https://api.openalex.org/concepts?search={q}&per-page={limit}"
+        "&mailto=open-brain@localhost"
+    )
+    if not data:
+        return []
+    out = []
+    for c in data.get("results", []):
+        cid = c.get("id") or ""
+        out.append(
+            {
+                "id": cid.replace("https://openalex.org/", ""),
+                "name": c.get("display_name"),
+                "level": c.get("level"),
+                "works_count": c.get("works_count"),
+            }
+        )
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +314,10 @@ def _crossref_record(item: dict) -> PaperMeta:
         bibtex=None,
         url=item.get("URL"),
         source_name="crossref",
+        issn_l=(item.get("ISSN") or [None])[0],
+        venue_source_id=None,
+        concepts=item.get("subject", []),
+        created_date=(item.get("created") or {}).get("date-time"),
     )
 
 

@@ -10,7 +10,15 @@ import os
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
 from openbrain import brain, resources
-from openbrain.tools import capture, search, library, entities, briefing, maintenance
+from openbrain.tools import (
+    capture,
+    search,
+    library,
+    entities,
+    briefing,
+    maintenance,
+    acquire,
+)
 
 
 def _build_auth() -> StaticTokenVerifier | None:
@@ -58,6 +66,7 @@ library.register(mcp)
 entities.register(mcp)
 briefing.register(mcp)
 maintenance.register(mcp)
+acquire.register(mcp)
 resources.register(mcp)
 
 

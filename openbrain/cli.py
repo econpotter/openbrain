@@ -9,15 +9,17 @@ Usage:
 """
 
 import asyncio
+import json
 from pathlib import Path
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
+from openbrain import acquire as acquire_mod
 from openbrain import brain
 
-app = typer.Typer(help="Ingest documents into the openbrain library.")
+app = typer.Typer(help="openbrain library: ingest and deterministic acquisition.")
 console = Console()
 
 
@@ -93,6 +95,138 @@ def ingest(
     else:
         console.print(f"[red]Error:[/red] Path not found: {path}")
         raise typer.Exit(1)
+
+
+def _emit(data) -> None:
+    console.print_json(json.dumps(data, default=str))
+
+
+@app.command()
+def acquire(
+    query: str = typer.Argument(..., help="Topic/keyword query"),
+    venue: list[str] = typer.Option(
+        None, "--venue", "-v", help="Restrict to venue abbrev(s); repeatable"
+    ),
+    since: int = typer.Option(None, "--since", help="Minimum publication year"),
+    limit: int = typer.Option(50, "--limit", help="Max survivors to store"),
+    min_overlap: int = typer.Option(
+        2, "--min-overlap", help="Lexical recall-gate threshold"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Preview only; store nothing"
+    ),
+):
+    """Search journal sources, prefilter deterministically, and store survivors."""
+    report = asyncio.run(
+        acquire_mod.acquire(
+            query,
+            venues_filter=set(venue) if venue else None,
+            since=since,
+            limit=limit,
+            min_overlap=min_overlap,
+            dry_run=dry_run,
+        )
+    )
+    _emit(report)
+
+
+@app.command(name="query-library")
+def query_library(
+    venue: str = typer.Option(None, "--venue", help="Canonical venue abbrev"),
+    kind: str = typer.Option(None, "--kind", help="Venue kind"),
+    year_min: int = typer.Option(None, "--year-min"),
+    year_max: int = typer.Option(None, "--year-max"),
+    status: str = typer.Option(None, "--status"),
+    concept: str = typer.Option(None, "--concept"),
+    sort: str = typer.Option("year", "--sort"),
+    limit: int = typer.Option(50, "--limit"),
+):
+    """Deterministic structured query over the library."""
+    rows = asyncio.run(
+        brain.query_library_struct(
+            venue=venue,
+            kind=kind,
+            year_min=year_min,
+            year_max=year_max,
+            status=status,
+            concept=concept,
+            sort=sort,
+            limit=limit,
+        )
+    )
+    _emit(rows)
+
+
+@app.command()
+def coverage(
+    venue: str = typer.Option(None, "--venue"),
+    concept: str = typer.Option(None, "--concept"),
+):
+    """Counts of library papers by year (optionally filtered)."""
+    rows = asyncio.run(brain.coverage_stats(venue=venue, concept=concept))
+    _emit(rows)
+
+
+@app.command(name="list-venues")
+def list_venues(
+    field: str = typer.Option(None, "--field"),
+    kind: str = typer.Option(None, "--kind"),
+    unknown: bool = typer.Option(False, "--unknown", help="List uncategorized venues"),
+):
+    """List the venue registry, or discovered-but-uncategorized venues."""
+    if unknown:
+        rows = asyncio.run(brain.list_unknown_venues())
+    else:
+        rows = asyncio.run(brain.list_registry_venues(field=field, kind=kind))
+    _emit(rows)
+
+
+@app.command(name="save-query")
+def save_query(
+    name: str = typer.Argument(...),
+    query: str = typer.Argument(...),
+    venue: list[str] = typer.Option(None, "--venue", "-v"),
+    since: int = typer.Option(None, "--since"),
+    min_overlap: int = typer.Option(2, "--min-overlap"),
+    cadence: str = typer.Option("weekly", "--cadence"),
+):
+    """Save a recurring acquisition query."""
+    row = asyncio.run(
+        brain.save_query(
+            name,
+            query,
+            venues=list(venue) if venue else None,
+            since=since,
+            min_overlap=min_overlap,
+            cadence=cadence,
+        )
+    )
+    _emit(row)
+
+
+@app.command(name="run-query")
+def run_query(name: str = typer.Argument(...)):
+    """Run one saved query now (incremental harvest)."""
+    report = asyncio.run(brain.run_saved_query(name))
+    _emit(report)
+
+
+@app.command(name="export-bibtex")
+def export_bibtex(
+    venue: str = typer.Option(None, "--venue"),
+    year_min: int = typer.Option(None, "--year-min"),
+    status: str = typer.Option(None, "--status"),
+    path: str = typer.Option(None, "--path", help="Write to file instead of stdout"),
+):
+    """Export matching library records as bibtex."""
+    bibtex = asyncio.run(
+        brain.export_bibtex_records(venue=venue, year_min=year_min, status=status)
+    )
+    if path:
+        Path(path).write_text(bibtex)
+        console.print(f"Wrote {bibtex.count('@')} record(s) to {path}")
+    else:
+        console.print(bibtex)
 
 
 if __name__ == "__main__":

@@ -110,3 +110,113 @@ class ResolveTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AcquireFieldCaptureTests(unittest.TestCase):
+    def test_openalex_record_captures_venue_keys_and_concepts(self):
+        work = {
+            "display_name": "Water demand",
+            "publication_year": 2021,
+            "authorships": [],
+            "primary_location": {
+                "source": {
+                    "display_name": "American Journal of Agricultural Economics",
+                    "issn_l": "0002-9092",
+                    "id": "https://openalex.org/S123",
+                }
+            },
+            "concepts": [{"display_name": "Water"}, {"display_name": "Demand"}],
+            "abstract_inverted_index": None,
+            "doi": None,
+            "created_date": "2026-06-20",
+        }
+        rec = sources._openalex_record(work)
+        self.assertEqual(rec["issn_l"], "0002-9092")
+        self.assertEqual(rec["venue_source_id"], "S123")
+        self.assertEqual(rec["concepts"], ["Water", "Demand"])
+        self.assertEqual(rec["created_date"], "2026-06-20")
+
+    def test_crossref_record_captures_subject_and_issn(self):
+        item = {
+            "title": ["X"],
+            "author": [],
+            "container-title": ["AJAE"],
+            "subject": ["Economics", "Water"],
+            "ISSN": ["0002-9092"],
+            "created": {"date-time": "2026-06-19T00:00:00Z"},
+        }
+        rec = sources._crossref_record(item)
+        self.assertEqual(rec["concepts"], ["Economics", "Water"])
+        self.assertEqual(rec["issn_l"], "0002-9092")
+        self.assertEqual(rec["created_date"], "2026-06-19T00:00:00Z")
+
+
+class PagedSearchTests(unittest.TestCase):
+    def _page(self, names, next_cursor):
+        return {
+            "results": [
+                {
+                    "display_name": n,
+                    "authorships": [],
+                    "primary_location": {},
+                    "concepts": [],
+                    "abstract_inverted_index": None,
+                    "doi": None,
+                }
+                for n in names
+            ],
+            "meta": {"next_cursor": next_cursor},
+        }
+
+    def test_paginates_and_flags_truncation(self):
+        pages = [self._page(["p0", "p1"], "C2"), self._page(["p2"], None)]
+        calls = {"i": 0}
+
+        def fake_get_json(url, headers=None):
+            out = pages[calls["i"]]
+            calls["i"] += 1
+            return out
+
+        with patch.object(sources, "_get_json", fake_get_json):
+            recs, truncated = sources.openalex_search_paged(
+                "water", limit=2, per_page=2
+            )
+        self.assertEqual(len(recs), 2)
+        self.assertTrue(truncated)
+
+    def test_pushes_filters_into_url(self):
+        seen = {}
+
+        def fake_get_json(url, headers=None):
+            seen["url"] = url
+            return self._page([], None)
+
+        with patch.object(sources, "_get_json", fake_get_json):
+            sources.openalex_search_paged(
+                "water", issns=["0002-9092", "0043-1397"], since=2015, limit=5
+            )
+        self.assertIn("primary_location.source.issn", seen["url"])
+        self.assertIn("from_publication_date", seen["url"])
+
+
+class RetryTests(unittest.TestCase):
+    def test_with_retry_succeeds_after_transient_failures(self):
+        calls = {"n": 0}
+
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise RuntimeError("429")
+            return "ok"
+
+        with patch.object(sources.time, "sleep", lambda *_: None):
+            self.assertEqual(sources._with_retry(flaky, attempts=3), "ok")
+        self.assertEqual(calls["n"], 3)
+
+    def test_with_retry_reraises_after_exhaustion(self):
+        def always_fail():
+            raise RuntimeError("boom")
+
+        with patch.object(sources.time, "sleep", lambda *_: None):
+            with self.assertRaises(RuntimeError):
+                sources._with_retry(always_fail, attempts=2)

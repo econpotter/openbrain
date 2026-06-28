@@ -1358,3 +1358,135 @@ class LibraryPathOverrideCopyTargetTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _FetchRecorder:
+    def __init__(self, rows=None):
+        self.rows = rows or []
+        self.calls = []
+
+    async def fetch(self, query, *args):
+        self.calls.append((query, args))
+        return self.rows
+
+
+class _SavedQueryConnection:
+    def __init__(self, row):
+        self.row = row
+        self.execute_calls = []
+
+    async def fetchrow(self, query, *args):
+        return self.row
+
+    async def execute(self, query, *args):
+        self.execute_calls.append((query, args))
+
+
+class StoreAcquiredPaperTests(unittest.IsolatedAsyncioTestCase):
+    async def test_keeps_raw_source_and_acquire_columns(self):
+        conn = _PaperConnection(existing=None)
+        meta = {
+            "title": "T",
+            "authors": ["A B"],
+            "year": 2021,
+            "source": "American Journal of Agricultural Economics",
+            "abstract": "water demand",
+            "doi": "10.1/x",
+            "issn_l": "0002-9092",
+            "venue_source_id": "S123",
+            "venue_abbrev": "AJAE",
+            "concepts": ["Water"],
+        }
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))),
+            patch.object(brain, "embed", AsyncMock(return_value=[0.1, 0.2])),
+        ):
+            res = await brain.store_acquired_paper(meta)
+
+        self.assertFalse(res["deduped"])
+        insert = next(
+            args for q, args in conn.fetchrow_calls if "INSERT INTO library" in q
+        )
+        # positional order: title, authors, year, source, abstract, doi, bibtex,
+        # issn, venue_source_id, venue_abbrev, concepts
+        self.assertEqual(insert[3], "American Journal of Agricultural Economics")
+        self.assertEqual(insert[7], "0002-9092")
+        self.assertEqual(insert[9], "AJAE")
+        self.assertEqual(insert[10], ["Water"])
+
+    async def test_dedups_existing_doi(self):
+        conn = _PaperConnection(existing={"id": "lib-1", "title": "T"})
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
+            res = await brain.store_acquired_paper({"doi": "10.1/x", "title": "T"})
+        self.assertTrue(res["deduped"])
+        self.assertFalse(
+            any("INSERT INTO library" in q for q, _ in conn.fetchrow_calls)
+        )
+
+
+class QueryLibraryStructTests(unittest.IsolatedAsyncioTestCase):
+    async def test_builds_parameterized_filters(self):
+        conn = _FetchRecorder(rows=[])
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
+            await brain.query_library_struct(venue="AJAE", year_min=2020)
+        query, args = conn.calls[0]
+        self.assertIn("l.venue_abbrev = $1", query)
+        self.assertIn("l.year >= $2", query)
+        self.assertEqual(args, ("AJAE", 2020))
+
+    async def test_sort_column_is_whitelisted(self):
+        conn = _FetchRecorder(rows=[])
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
+            await brain.query_library_struct(sort="year; DROP TABLE library")
+        query, _ = conn.calls[0]
+        self.assertIn("ORDER BY l.year", query)
+        self.assertNotIn("DROP", query)
+
+
+class CitekeyTests(unittest.TestCase):
+    def test_two_authors(self):
+        self.assertEqual(
+            brain.citekey(["Jane Smith", "Bob Lee"], 2021, "AJAE"),
+            "Smith-Lee-2021-AJAE",
+        )
+
+    def test_three_or_more_authors_use_etal(self):
+        self.assertEqual(brain.citekey(["A", "B", "C"], 2020, "WRR"), "A-ETAL-2020-WRR")
+
+    def test_render_bibtex_minimal(self):
+        entry = brain._render_bibtex(
+            {"title": "T", "authors": ["Jane Smith"], "year": 2021, "source": "AJAE"},
+            "Smith-2021-AJAE",
+        )
+        self.assertIn("@article{Smith-2021-AJAE,", entry)
+        self.assertIn("title = {T}", entry)
+
+
+class SavedQueryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_run_saved_query_advances_watermark_to_batch_max(self):
+        row = {
+            "name": "q1",
+            "query": "water demand",
+            "venues": None,
+            "since": None,
+            "min_overlap": 2,
+            "harvested_through": None,
+        }
+        conn = _SavedQueryConnection(row)
+        report = {
+            "found": 2,
+            "stored": 2,
+            "max_created_date": "2026-06-20T00:00:00Z",
+            "truncated": False,
+        }
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))),
+            patch.object(brain, "_acquire_for_saved", AsyncMock(return_value=report)),
+        ):
+            await brain.run_saved_query("q1")
+
+        update = next(
+            args for q, args in conn.execute_calls if "UPDATE saved_queries" in q
+        )
+        # args: (name, max_created_date, yield_json)
+        self.assertEqual(update[1], "2026-06-20T00:00:00Z")

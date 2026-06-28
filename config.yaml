@@ -66,6 +66,10 @@ extraction:
   # Provider: openrouter | litellm
   provider: litellm
   model: moon8-fast
+  # Structured single-shot extraction: 0.0 for stable, schema-faithful output (no
+  # sampling/voting, so randomness is pure downside). Not bit-reproducible (API), but
+  # most stable. Raise only if you add multi-sample self-consistency.
+  temperature: 0.0
   fallback:
     provider: openrouter
     model: deepseek/deepseek-v4-flash

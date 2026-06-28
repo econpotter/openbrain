@@ -232,11 +232,16 @@ reconstruction — `sources.py` already reconstructs abstracts), `sources/crossr
 The genuinely missing surface today (openbrain exposes semantic `search_library` + substring
 `find_library_records`, but no structured query). New tools in `tools/acquire.py`:
 
-- **`query_library(venue=None, kind=None, year_min=None, year_max=None, status=None, concept=None,
-  has_abstract=None, sort='year', limit=50)`** — deterministic structured query over `library`.
-  This is "search by journal/year/status" done right (exact `venue_abbrev`/`issn`). `kind=` joins
-  `venues` to filter by venue type (e.g. journals only, exclude preprints). `venue=` filters
-  `venue_abbrev IS NOT NULL`; uncategorized-venue papers surface only via semantic/concept search.
+- **`search_library(<text>, author=None, title=None, journal=None, abstract=None, venue=None,
+  kind=None, year_min=None, year_max=None, status=None, concept=None, fuzzy=False, sort='year',
+  limit=50)`** — returns papers. The structured/exact filters here (venue/kind/year/status/concept,
+  exact by default, `fuzzy=True` flips text fields) are the deterministic acquire-side surface:
+  "search by journal/year/status" done right (exact `venue_abbrev`/`issn`). The optional `<text>`
+  argument adds **relatedness ranking** (embedding ∪ findings search, merged) — that half is
+  specified in the derivations plan (`2026-06-27-derivations-findings.md` §7), not here. `kind=`
+  joins `venues` to filter by venue type; `venue=` filters `venue_abbrev IS NOT NULL`
+  (uncategorized-venue papers surface only via text/relatedness search). A companion
+  `search_findings` (findings rows + citations) also lives in the derivations plan.
 - **`acquire(... dry_run=True)`** — preview: counts + venue breakdown + sample titles, no store.
   The agent's measure-and-tune loop (too broad → tighten; too narrow → broaden).
 - **`list_concepts(term)`** — OpenAlex concept lookup (+ work counts) so an agent expands a query
@@ -311,16 +316,20 @@ agent supplies the LLM. This spec only ensures the retrieval surface (§6) is ri
 it. Optional LLM topic-expansion at acquisition is likewise external (an agent improves a query,
 then calls deterministic `acquire`).
 
-## 10. What ports from the `library` reference impl
+## 10. Implementation — fresh in openbrain, `library` repo as reference only
 
-Near-verbatim (already TDD'd): `slug.py`, `store/dedup.py` (+ new title/year fallback for
-DOI-less/cross-source dups), `relevance/prefilter.py`, `registry.py` + `venues.toml` (now seeding a
-DB `venues` table, extended with `source_id`/`kind`/auto-grow), `store/bibtex.py` (render + sharding
-for export), and the field mapping in `sources/openalex.py`/`crossref.py` — extended so
-openbrain's `sources.py` captures what it omits today: OpenAlex `issn_l` + **`source.id`** +
-`concepts`, and Crossref **`subject[]` + `ISSN`**. New: a small retry/backoff helper around the
-bulk source calls (429/transient — §5 SEARCH/ENRICH); distinct from the deleted cross-tunnel `sync`
-retry.
+**Decision: implement fresh in openbrain. Do NOT port code.** We folded `library` into openbrain;
+the win is one clean codebase, not a transplant of another repo's modules. The retired `library`
+repo is a **reference** for proven logic — read it to remember *how* a piece works, then write the
+openbrain implementation to fit openbrain's structure (its `brain.py`/`tools/` split, its DB access
+patterns, its tests). Prioritize good architecture over preserving the reference's shape.
+
+Logic worth re-deriving from the reference (these were TDD'd there, so the algorithms are sound):
+slug scheme, dedup (+ new title/year fallback for DOI-less/cross-source dups), prefilter, the
+registry match cascade + `venues.toml` seeds (now a DB `venues` table with `source_id`/`kind`/
+auto-grow), bibtex render + sharding. Extend openbrain's existing `sources.py` to capture what it
+omits today: OpenAlex `issn_l` + **`source.id`** + `concepts`, and Crossref **`subject[]` + `ISSN`**.
+New: a small retry/backoff helper around the bulk source calls (429/transient — §5 SEARCH/ENRICH).
 
 **Retired / deleted (integration tax):** the FastMCP openbrain client, SCP staging, host
 modes, the `sync` command + `obstatus` bib fields, the `LLMJudge` + `openai` dep, `relscore`,
@@ -365,9 +374,9 @@ in place and re-run `setup_db.sh` against a blank DB.
 1. Edit `schemas/core/003_library.sql` to add `issn`/`venue_source_id`/`venue_abbrev`/`concepts` +
    indexes (§3). Add baseline files for the `venues` table (§4) and `saved_queries` table (§7).
    Re-run `setup_db.sh` against a blank DB. No ALTER, no backfill — re-derivable from re-acquisition.
-2. Port the deterministic modules into `openbrain/acquire.py` + `openbrain/venues.py`; seed `venues`
-   from `venues.toml` at setup. Stop slugging `source` in `_store_paper`; extend it to carry the new
-   columns (§5 STORE).
+2. Implement the deterministic modules fresh as `openbrain/acquire.py` + `openbrain/venues.py`
+   (library prototype as reference only — §10); seed `venues` from `venues.toml` at setup. Stop
+   slugging `source` in `_store_paper`; extend it to carry the new columns (§5 STORE).
 3. Add `tools/acquire.py` and register it in `server.py`.
 4. Wire saved-query cron into the maintenance schedule.
 5. Archive the `library` repo (README → this spec).

@@ -18,6 +18,7 @@ from rich.table import Table
 
 from openbrain import acquire as acquire_mod
 from openbrain import brain
+from openbrain import findings as findings_mod
 
 app = typer.Typer(help="openbrain library: ingest and deterministic acquisition.")
 console = Console()
@@ -197,6 +198,44 @@ def export_bibtex(
         console.print(f"Wrote {bibtex.count('@')} record(s) to {path}")
     else:
         console.print(bibtex)
+
+
+@app.command(name="search-findings")
+def search_findings(
+    text: str = typer.Option(None, "--text", help="Match either side of the causal edge"),
+    cause: str = typer.Option(None, "--cause"),
+    effect: str = typer.Option(None, "--effect"),
+    stat: str = typer.Option(None, "--stat", help="magnitude_stat e.g. elasticity"),
+    venue: str = typer.Option(None, "--venue"),
+    year_min: int = typer.Option(None, "--year-min"),
+    status: str = typer.Option(None, "--status"),
+    group_by: str = typer.Option(None, "--group-by", help="'paper' to collapse by source"),
+    limit: int = typer.Option(50, "--limit"),
+):
+    """Search extracted findings; each row carries its source paper citation."""
+    rows = asyncio.run(
+        brain.search_findings(
+            text=text,
+            cause=cause,
+            effect=effect,
+            stat=stat,
+            venue=venue,
+            year_min=year_min,
+            status=status,
+            group_by=group_by,
+            limit=limit,
+        )
+    )
+    _emit(rows)
+
+
+@app.command(name="backfill-findings")
+def backfill_findings(
+    limit: int = typer.Option(100, "--limit"),
+):
+    """Extract findings for papers still pending (extraction model down at ingest)."""
+    res = asyncio.run(findings_mod.backfill_findings(limit=limit))
+    _emit(res)
 
 
 if __name__ == "__main__":

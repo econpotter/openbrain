@@ -1408,6 +1408,8 @@ async def ingest_document_pipeline(
                 section,
             )
 
+    await _extract_findings_inline(library_id)
+
     author_str = " & ".join(authors) if authors else "Unknown"
     thought = f"Ingested: {author_str} {year or ''} — {title}".strip()
     await store_thought(
@@ -1443,6 +1445,22 @@ def _paper_sources_order() -> list[str]:
     if enabled is not None:
         order = [s for s in order if s in enabled]
     return order
+
+
+async def _extract_findings_inline(library_id) -> None:
+    """Best-effort inline findings extraction at store time (second derivation).
+
+    Mirrors the embedding deferral: if the extraction model is reachable, findings
+    land immediately and the paper is marked ``done``; if it fails, the paper stays
+    ``findings_status='pending'`` for the nightly ``backfill_findings`` to heal.
+    Never lets an extraction failure abort the write — same invariant as embeddings.
+    """
+    try:
+        from openbrain import findings as _findings
+
+        await _findings.extract_findings(str(library_id))
+    except Exception as exc:
+        logger.warning("Inline findings extraction skipped for %s: %s", library_id, exc)
 
 
 async def _store_paper(
@@ -1512,6 +1530,8 @@ async def _store_paper(
             )
         abstract_stored = True
         embedded = emb is not None
+
+    await _extract_findings_inline(library_id)
 
     authors = meta.get("authors") or []
     author_str = " & ".join(authors) if authors else "Unknown"
@@ -1603,6 +1623,8 @@ async def store_acquired_paper(meta: dict, *, force: bool = False) -> dict:
                 emb,
             )
         embedded = emb is not None
+
+    await _extract_findings_inline(library_id)
 
     return {
         "id": str(library_id),
@@ -1799,6 +1821,113 @@ async def search_library_vec(
             *params,
         )
     return [dict(r) for r in rows]
+
+
+def _finding_source(row) -> dict:
+    """Citation block for a finding's source paper (never a bare finding)."""
+    authors = list(row["authors"] or [])
+    return {
+        "citekey": citekey(authors, row["year"], row["venue_abbrev"]),
+        "authors": authors,
+        "year": row["year"],
+        "title": row["title"],
+        "venue_abbrev": row["venue_abbrev"],
+        "doi": row["doi"],
+    }
+
+
+def _finding_block(row) -> dict:
+    return {
+        "id": str(row["finding_id"]),
+        "cause_text": row["cause_text"],
+        "effect_text": row["effect_text"],
+        "magnitude_value": row["magnitude_value"],
+        "magnitude_unit": row["magnitude_unit"],
+        "magnitude_stat": row["magnitude_stat"],
+        "conditions": row["conditions"],
+        "raw_quote": row["raw_quote"],
+        "confidence": row["confidence"],
+    }
+
+
+async def search_findings(
+    *,
+    text: str | None = None,
+    cause: str | None = None,
+    effect: str | None = None,
+    stat: str | None = None,
+    venue: str | None = None,
+    year_min: int | None = None,
+    status: str | None = None,
+    group_by: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """Search extracted findings, each JOINed to its source paper citation.
+
+    Findings are NEVER returned bare — every row carries a ``source`` block hard-linked
+    to the paper PK (the anti-hallucination payoff). ``text`` matches either side of the
+    edge (cause/effect text); ``cause``/``effect`` match one side; ``stat``/``venue``/
+    ``year_min``/``status`` are structured filters. ``group_by='paper'`` collapses N
+    findings under one source. This is the simple-mode (text-match) query surface;
+    graph traversal over resolved variables is the deferred §6 checkpoint.
+    """
+    conditions: list[str] = []
+    params: list = []
+    p = 1
+
+    def add(cond: str, value) -> None:
+        nonlocal p
+        conditions.append(cond.format(p=p))
+        params.append(value)
+        p += 1
+
+    if text is not None:
+        add("(f.cause_text ILIKE ${p} OR f.effect_text ILIKE ${p})", f"%{text}%")
+        # ILIKE binds the one placeholder twice via the same param index reuse below.
+    if cause is not None:
+        add("f.cause_text ILIKE ${p}", f"%{cause}%")
+    if effect is not None:
+        add("f.effect_text ILIKE ${p}", f"%{effect}%")
+    if stat is not None:
+        add("f.magnitude_stat = ${p}", stat)
+    if venue is not None:
+        add("l.venue_abbrev = ${p}", venue)
+    if year_min is not None:
+        add("l.year >= ${p}", year_min)
+    if status is not None:
+        add("l.findings_status = ${p}", status)
+
+    where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+    params.append(limit)
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT f.id AS finding_id, f.cause_text, f.effect_text, f.magnitude_value,
+                   f.magnitude_unit, f.magnitude_stat, f.conditions, f.raw_quote,
+                   f.confidence,
+                   l.id AS paper_id, l.title, l.authors, l.year, l.venue_abbrev, l.doi
+            FROM findings f
+            JOIN library l ON l.id = f.paper_id
+            {where}
+            ORDER BY f.created_at DESC
+            LIMIT ${p}
+            """,
+            *params,
+        )
+
+    if group_by == "paper":
+        grouped: dict = {}
+        for row in rows:
+            key = str(row["paper_id"])
+            entry = grouped.setdefault(
+                key, {"source": _finding_source(row), "findings": []}
+            )
+            entry["findings"].append(_finding_block(row))
+        return list(grouped.values())
+
+    return [{"finding": _finding_block(row), "source": _finding_source(row)} for row in rows]
 
 
 async def find_library_records(query: str) -> list[dict]:

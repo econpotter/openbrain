@@ -181,36 +181,6 @@ def list_venues(
     _emit(rows)
 
 
-@app.command(name="save-query")
-def save_query(
-    name: str = typer.Argument(...),
-    query: str = typer.Argument(...),
-    venue: list[str] = typer.Option(None, "--venue", "-v"),
-    since: int = typer.Option(None, "--since"),
-    min_overlap: int = typer.Option(2, "--min-overlap"),
-    cadence: str = typer.Option("weekly", "--cadence"),
-):
-    """Save a recurring acquisition query."""
-    row = asyncio.run(
-        brain.save_query(
-            name,
-            query,
-            venues=list(venue) if venue else None,
-            since=since,
-            min_overlap=min_overlap,
-            cadence=cadence,
-        )
-    )
-    _emit(row)
-
-
-@app.command(name="run-query")
-def run_query(name: str = typer.Argument(...)):
-    """Run one saved query now (incremental harvest)."""
-    report = asyncio.run(brain.run_saved_query(name))
-    _emit(report)
-
-
 @app.command(name="export-bibtex")
 def export_bibtex(
     venue: str = typer.Option(None, "--venue"),

@@ -49,9 +49,6 @@ class PaperMeta(TypedDict, total=False):
         str | None
     )  # OpenAlex source id (S…), issn-equivalent for issn-less venues
     concepts: list[str]  # OpenAlex concepts ∪ Crossref subjects ∪ source keywords
-    created_date: (
-        str | None
-    )  # source-index created date (ISO); incremental-harvest watermark
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +175,6 @@ def _openalex_record(work: dict) -> PaperMeta:
         issn_l=venue.get("issn_l"),
         venue_source_id=source_id,
         concepts=concepts,
-        created_date=work.get("created_date"),
     )
 
 
@@ -211,14 +207,13 @@ def openalex_search_paged(
     *,
     issns: list[str] | None = None,
     since: int | None = None,
-    from_created_date: str | None = None,
     limit: int = 50,
     per_page: int = 200,
 ) -> tuple[list[PaperMeta], bool]:
     """
     Cursor-paginated OpenAlex search with API-side filters for the acquire
-    pipeline. Filters (`issns`, `since`, `from_created_date`) are pushed into the
-    OpenAlex `filter=` parameter rather than applied client-side.
+    pipeline. Filters (`issns`, `since`) are pushed into the OpenAlex `filter=`
+    parameter rather than applied client-side.
 
     `issns` restricts to those journal ISSN-Ls (the registry resolves
     venue_abbrev → issns before calling). Returns `(records, truncated)`; the
@@ -230,8 +225,6 @@ def openalex_search_paged(
         filters.append("primary_location.source.issn:" + "|".join(issns))
     if since:
         filters.append(f"from_publication_date:{since}-01-01")
-    if from_created_date:
-        filters.append(f"from_created_date:{from_created_date}")
 
     q = urllib.parse.quote(query)
     per_page = min(per_page, 200)
@@ -317,7 +310,6 @@ def _crossref_record(item: dict) -> PaperMeta:
         issn_l=(item.get("ISSN") or [None])[0],
         venue_source_id=None,
         concepts=item.get("subject", []),
-        created_date=(item.get("created") or {}).get("date-time"),
     )
 
 

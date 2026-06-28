@@ -2,7 +2,7 @@
 acquire.py — the deterministic paper-acquisition pipeline.
 
     acquire(query, *, venues_filter=None, since=None, limit=50, min_overlap=2,
-            dry_run=False, from_created_date=None) -> report
+            dry_run=False) -> report
 
 Stages: SEARCH (paginated, API-side filters) → DEDUP (DOI then title+year) →
 ENRICH (crossref fills missing abstract/issn/concepts) → CANON (registry match
@@ -87,7 +87,6 @@ async def acquire(
     limit: int = 50,
     min_overlap: int = 2,
     dry_run: bool = False,
-    from_created_date: str | None = None,
 ) -> dict:
     """Run the deterministic acquisition pipeline and return a report dict."""
     pool = await brain.get_pool()
@@ -103,7 +102,6 @@ async def acquire(
             query,
             issns=issns,
             since=since,
-            from_created_date=from_created_date,
             limit=limit * _OVERFETCH,
         )
 
@@ -173,12 +171,8 @@ async def acquire(
 
     # --- STORE (skip writes on dry_run) ---
     stored = 0
-    max_created_date: str | None = None
     sample: list[dict] = []
     for rec in survivors:
-        created = rec.get("created_date")
-        if created and (max_created_date is None or created > max_created_date):
-            max_created_date = created
         if len(sample) < 10:
             sample.append(
                 {
@@ -199,6 +193,5 @@ async def acquire(
         "stored": stored,
         "truncated": truncated,
         "unknown_venues": unknown_venues,
-        "max_created_date": max_created_date,
         "sample": sample,
     }

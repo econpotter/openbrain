@@ -64,6 +64,13 @@ print(f"LIBRARY_PATH={shlex.quote(str(library_path))}")
 PY
 )"
 
+# Container override: config.yaml holds host-side paths, but inside the
+# maintenance container the host dir is bind-mounted elsewhere (e.g. host
+# /mnt/data → container /data). When set, these env vars point the backup at
+# the mounted paths — same mechanism as OPENBRAIN_LIBRARY_PATH for ingest.
+BACKUP_DIR="${OPENBRAIN_BACKUP_PATH:-$BACKUP_DIR}"
+LIBRARY_PATH="${OPENBRAIN_LIBRARY_PATH:-$LIBRARY_PATH}"
+
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 mkdir -p "$BACKUP_DIR"

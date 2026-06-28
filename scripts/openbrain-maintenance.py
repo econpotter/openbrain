@@ -6,9 +6,11 @@ import asyncio
 from datetime import datetime, timedelta
 import logging
 from pathlib import Path
+import subprocess
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR.parent))
 
 from openbrain import brain
 
@@ -28,8 +30,38 @@ def _seconds_until(run_at: str) -> float:
     return (target - now).total_seconds()
 
 
+def _run_backup() -> None:
+    """Back up DB + library before any other maintenance work.
+
+    Runs first so a later step failing can never skip the backup. Failures here
+    are logged but do not abort the rest of the run — a missed backup must not
+    block nightly consolidation, and the next run retries it.
+    """
+    backup_script = SCRIPT_DIR / "backup.sh"
+    try:
+        proc = subprocess.run(
+            ["bash", str(backup_script)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        for line in proc.stdout.splitlines():
+            logger.info("backup: %s", line)
+        if proc.returncode != 0:
+            logger.error(
+                "Backup failed (exit %d): %s",
+                proc.returncode,
+                proc.stderr.strip() or "(no stderr)",
+            )
+        else:
+            logger.info("Backup complete.")
+    except Exception as exc:
+        logger.exception("Backup step errored: %s", exc)
+
+
 async def _run_once() -> None:
     logger.info("Maintenance run started.")
+    _run_backup()
     result = await brain.run_extraction_once()
     logger.info(
         "Extraction complete: "

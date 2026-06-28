@@ -1,10 +1,12 @@
 """
 tools/acquire.py — MCP tools for the deterministic acquire subsystem:
 acquisition (acquire), structured query + affordances (query_library, coverage,
-list_venues, list_concepts, remove_record), saved-query management
-(save_query, list_queries, run_query, update_query, delete_query), and bibtex
-export. All return JSON-friendly text so an external agent drives the loop
-without parsing prose.
+list_venues, list_concepts, remove_record), and bibtex export. All return
+JSON-friendly text so an external agent drives the loop without parsing prose.
+
+The automated research agenda (which topics to harvest, on what cadence) is
+external — a driver calls `acquire` on request; openbrain owns no saved-query
+registry or scheduler.
 """
 
 import asyncio
@@ -126,67 +128,3 @@ def register(mcp):
                 fh.write(bibtex)
             return f"Wrote {bibtex.count('@')} record(s) to {path}"
         return bibtex
-
-    # --- saved queries -----------------------------------------------------
-
-    @mcp.tool
-    async def save_query(
-        name: str,
-        query: str,
-        venues: list[str] | None = None,
-        since: int | None = None,
-        min_overlap: int = 2,
-        cadence: str = "weekly",
-    ) -> str:
-        """Save a recurring acquisition query (upsert on name). Cron runs due
-        queries by cadence (nightly/weekly/monthly), harvesting only papers
-        indexed since the last run."""
-        row = await brain.save_query(
-            name,
-            query,
-            venues=venues,
-            since=since,
-            min_overlap=min_overlap,
-            cadence=cadence,
-        )
-        return json.dumps(row, indent=2, default=str)
-
-    @mcp.tool
-    async def list_queries() -> str:
-        """List saved acquisition queries with their watermark + last yield."""
-        rows = await brain.list_queries()
-        return json.dumps(rows, indent=2, default=str)
-
-    @mcp.tool
-    async def run_query(name: str) -> str:
-        """Run one saved query now (incremental harvest), advancing its watermark."""
-        report = await brain.run_saved_query(name)
-        return json.dumps(report, indent=2, default=str)
-
-    @mcp.tool
-    async def update_query(
-        name: str,
-        query: str | None = None,
-        venues: list[str] | None = None,
-        since: int | None = None,
-        min_overlap: int | None = None,
-        cadence: str | None = None,
-    ) -> str:
-        """Update fields on a saved query (only the provided fields change)."""
-        row = await brain.update_query(
-            name,
-            query=query,
-            venues=venues,
-            since=since,
-            min_overlap=min_overlap,
-            cadence=cadence,
-        )
-        if row is None:
-            return json.dumps({"updated": 0, "name": name}, default=str)
-        return json.dumps(row, indent=2, default=str)
-
-    @mcp.tool
-    async def delete_query(name: str) -> str:
-        """Delete a saved acquisition query."""
-        result = await brain.delete_query(name)
-        return json.dumps(result, indent=2, default=str)

@@ -128,13 +128,11 @@ class AcquireFieldCaptureTests(unittest.TestCase):
             "concepts": [{"display_name": "Water"}, {"display_name": "Demand"}],
             "abstract_inverted_index": None,
             "doi": None,
-            "created_date": "2026-06-20",
         }
         rec = sources._openalex_record(work)
         self.assertEqual(rec["issn_l"], "0002-9092")
         self.assertEqual(rec["venue_source_id"], "S123")
         self.assertEqual(rec["concepts"], ["Water", "Demand"])
-        self.assertEqual(rec["created_date"], "2026-06-20")
 
     def test_crossref_record_captures_subject_and_issn(self):
         item = {
@@ -143,12 +141,10 @@ class AcquireFieldCaptureTests(unittest.TestCase):
             "container-title": ["AJAE"],
             "subject": ["Economics", "Water"],
             "ISSN": ["0002-9092"],
-            "created": {"date-time": "2026-06-19T00:00:00Z"},
         }
         rec = sources._crossref_record(item)
         self.assertEqual(rec["concepts"], ["Economics", "Water"])
         self.assertEqual(rec["issn_l"], "0002-9092")
-        self.assertEqual(rec["created_date"], "2026-06-19T00:00:00Z")
 
 
 class PagedSearchTests(unittest.TestCase):

@@ -104,6 +104,17 @@ fetch_paper(identifier | identifiers | topic)
 Fetch is fileless: no PDF is downloaded. Document ingest (with a file) and paper
 fetch (metadata + abstract only) are separate paths into the same `library`.
 
+### Acquire: capture on request, not a research agenda
+
+`acquire(query)` is a bulk-capture verb: search journal sources, deduplicate,
+enrich, canonicalize venues, deterministically prefilter (lexical overlap, no
+LLM), and store survivors with embeddings. openbrain captures on request and
+reasons over what the library holds. The automated research agenda — which
+topics to harvest and on what cadence — is **external**: a driver (a cron, an
+orchestra job, or a research agent) decides the standing topics and calls
+`openbrain acquire <query>`. openbrain owns no saved-query registry or
+scheduler; the agenda is the researcher's concern, not the memory system's.
+
 ### Embedding backfill
 
 ```

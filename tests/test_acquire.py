@@ -90,7 +90,6 @@ class AcquirePipelineTests(unittest.IsolatedAsyncioTestCase):
                 "concepts": ["Water"],
                 "authors": [],
                 "source": "AJAE",
-                "created_date": "2026-06-20",
             }
         ]
         stored = []
@@ -115,7 +114,6 @@ class AcquirePipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report["found"], 1)
         self.assertEqual(report["stored"], 0)
         self.assertEqual(stored, [])
-        self.assertEqual(report["max_created_date"], "2026-06-20")
 
     async def test_real_run_stores_survivors(self):
         recs = [

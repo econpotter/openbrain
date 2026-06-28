@@ -1370,18 +1370,6 @@ class _FetchRecorder:
         return self.rows
 
 
-class _SavedQueryConnection:
-    def __init__(self, row):
-        self.row = row
-        self.execute_calls = []
-
-    async def fetchrow(self, query, *args):
-        return self.row
-
-    async def execute(self, query, *args):
-        self.execute_calls.append((query, args))
-
-
 class StoreAcquiredPaperTests(unittest.IsolatedAsyncioTestCase):
     async def test_keeps_raw_source_and_acquire_columns(self):
         conn = _PaperConnection(existing=None)
@@ -1460,33 +1448,3 @@ class CitekeyTests(unittest.TestCase):
         )
         self.assertIn("@article{Smith-2021-AJAE,", entry)
         self.assertIn("title = {T}", entry)
-
-
-class SavedQueryTests(unittest.IsolatedAsyncioTestCase):
-    async def test_run_saved_query_advances_watermark_to_batch_max(self):
-        row = {
-            "name": "q1",
-            "query": "water demand",
-            "venues": None,
-            "since": None,
-            "min_overlap": 2,
-            "harvested_through": None,
-        }
-        conn = _SavedQueryConnection(row)
-        report = {
-            "found": 2,
-            "stored": 2,
-            "max_created_date": "2026-06-20T00:00:00Z",
-            "truncated": False,
-        }
-        with (
-            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))),
-            patch.object(brain, "_acquire_for_saved", AsyncMock(return_value=report)),
-        ):
-            await brain.run_saved_query("q1")
-
-        update = next(
-            args for q, args in conn.execute_calls if "UPDATE saved_queries" in q
-        )
-        # args: (name, max_created_date, yield_json)
-        self.assertEqual(update[1], "2026-06-20T00:00:00Z")

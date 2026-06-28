@@ -78,19 +78,6 @@ async def _run_once() -> None:
         status,
     )
 
-    due = await brain.due_saved_queries()
-    for q in due:
-        try:
-            report = await brain.run_saved_query(q["name"])
-            logger.info(
-                "Saved query %s: %s found, %s stored.",
-                q["name"],
-                report.get("found"),
-                report.get("stored"),
-            )
-        except Exception as exc:
-            logger.exception("Saved query %s failed: %s", q["name"], exc)
-
     logger.info("Maintenance run complete.")
 
 

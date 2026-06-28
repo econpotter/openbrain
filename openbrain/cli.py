@@ -182,6 +182,13 @@ def list_venues(
     _emit(rows)
 
 
+@app.command(name="seed-venues")
+def seed_venues():
+    """Seed the venues registry from openbrain/venues.toml (idempotent upsert)."""
+    count = asyncio.run(brain.seed_venues())
+    console.print(f"Seeded {count} venue(s) from venues.toml.")
+
+
 @app.command(name="export-bibtex")
 def export_bibtex(
     venue: str = typer.Option(None, "--venue"),

@@ -171,6 +171,15 @@ class CliTests(unittest.TestCase):
         self.assertEqual(res.exit_code, 0)
         self.assertIn("A", res.stdout)
 
+    def test_cli_seed_venues_runs(self):
+        async def fake():
+            return 4
+
+        with patch("openbrain.brain.seed_venues", fake):
+            res = CliRunner().invoke(app, ["seed-venues"])
+        self.assertEqual(res.exit_code, 0)
+        self.assertIn("Seeded 4 venue(s)", res.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

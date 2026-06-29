@@ -238,6 +238,69 @@ class CliTests(unittest.TestCase):
         self.assertEqual(res.exit_code, 0)
         self.assertIn("Seeded 4 venue(s)", res.stdout)
 
+    def test_cli_citations_emits_neighbors(self):
+        neighbors = [{"title": "Neighbor", "doi": "10.1/n"}]
+        with patch(
+            "openbrain.sources.openalex_citation_neighbors", lambda _id: neighbors
+        ):
+            res = CliRunner().invoke(app, ["citations", "W1"])
+        self.assertEqual(res.exit_code, 0)
+        self.assertIn("neighbors", res.stdout)
+        self.assertIn("Neighbor", res.stdout)
+
+    def test_cli_relevance_emits_cosines_in_text_order(self):
+        async def fake(anchors, texts):
+            self.assertEqual(anchors, ["lib-1", "lib-2"])
+            self.assertEqual(texts, ["one", "two"])
+            return [0.9, 0.1]
+
+        with patch("openbrain.brain.relevance", fake):
+            res = CliRunner().invoke(
+                app,
+                [
+                    "relevance",
+                    "--anchor",
+                    "lib-1",
+                    "--anchor",
+                    "lib-2",
+                    "--text",
+                    "one",
+                    "--text",
+                    "two",
+                ],
+            )
+        self.assertEqual(res.exit_code, 0)
+        self.assertIn("cosines", res.stdout)
+        self.assertIn("0.9", res.stdout)
+
+    def test_cli_store_paper_emits_id_title_deduped(self):
+        async def fake(meta):
+            return {"id": "lib-9", "title": meta["title"], "deduped": False}
+
+        with patch("openbrain.brain.store_one", fake):
+            res = CliRunner().invoke(
+                app, ["store-paper", "--json", '{"title": "A Paper"}']
+            )
+        self.assertEqual(res.exit_code, 0)
+        self.assertIn("lib-9", res.stdout)
+        self.assertIn("A Paper", res.stdout)
+
+    def test_cli_search_library_emits_distinct_ids_top_k(self):
+        async def fake(query, count=10):
+            # Two chunks of the same paper collapse to one id; order preserved.
+            return [
+                {"library_id": "lib-1"},
+                {"library_id": "lib-1"},
+                {"library_id": "lib-2"},
+            ]
+
+        with patch("openbrain.brain.search_library_vec", fake):
+            res = CliRunner().invoke(app, ["search-library", "water", "--limit", "5"])
+        self.assertEqual(res.exit_code, 0)
+        self.assertIn("ids", res.stdout)
+        self.assertIn("lib-1", res.stdout)
+        self.assertIn("lib-2", res.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

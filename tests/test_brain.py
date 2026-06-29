@@ -1448,3 +1448,52 @@ class CitekeyTests(unittest.TestCase):
         )
         self.assertIn("@article{Smith-2021-AJAE,", entry)
         self.assertIn("title = {T}", entry)
+
+
+class RelevanceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_anchors_raises(self):
+        with self.assertRaises(ValueError):
+            await brain.relevance([], ["some text"])
+
+    async def test_no_stored_embeddings_raises(self):
+        connection = _FetchConnection([])
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))):
+            with self.assertRaises(ValueError):
+                await brain.relevance(["lib-1"], ["text"])
+
+    async def test_centroid_is_mean_and_cosines_in_order(self):
+        # Two anchor embeddings -> centroid is their component-wise mean = [1, 0].
+        connection = _FetchConnection(
+            [{"embedding": [1.0, 1.0]}, {"embedding": [1.0, -1.0]}]
+        )
+        # Candidate 1 aligns with the centroid (cos 1.0); candidate 2 is orthogonal.
+        embeddings = {"aligned": [2.0, 0.0], "orthogonal": [0.0, 5.0]}
+
+        async def fake_embed(text, task="document"):
+            return embeddings[text]
+
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(brain, "embed", fake_embed),
+        ):
+            scores = await brain.relevance(
+                ["lib-1", "lib-2"], ["aligned", "orthogonal"]
+            )
+        self.assertEqual(len(scores), 2)
+        self.assertAlmostEqual(scores[0], 1.0)
+        self.assertAlmostEqual(scores[1], 0.0)
+
+
+class StoreOneTests(unittest.IsolatedAsyncioTestCase):
+    async def test_store_one_wraps_store_acquired_paper(self):
+        async def fake_store(meta, *, force=False):
+            return {
+                "id": "lib-9",
+                "title": meta["title"],
+                "embedded": True,
+                "deduped": False,
+            }
+
+        with patch.object(brain, "store_acquired_paper", fake_store):
+            out = await brain.store_one({"title": "A Paper"})
+        self.assertEqual(out, {"id": "lib-9", "title": "A Paper", "deduped": False})

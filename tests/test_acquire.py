@@ -160,6 +160,64 @@ class AcquirePipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored, ["Water demand"])
         self.assertEqual(report["prefiltered_out"]["low_overlap"], 1)
 
+    async def test_report_carries_stored_ids_in_store_order(self):
+        recs = [
+            {
+                "title": "Water demand",
+                "abstract": "water demand elasticity",
+                "year": 2021,
+                "doi": "10.1/a",
+                "concepts": ["Water"],
+                "authors": [],
+                "source": "AJAE",
+            },
+            {
+                "title": "Water pricing",
+                "abstract": "water demand pricing policy",
+                "year": 2022,
+                "doi": "10.1/b",
+                "concepts": ["Water"],
+                "authors": [],
+                "source": "AJAE",
+            },
+            {
+                "title": "Water rights",
+                "abstract": "water demand allocation rights",
+                "year": 2023,
+                "doi": "10.1/c",
+                "concepts": ["Water"],
+                "authors": [],
+                "source": "AJAE",
+            },
+        ]
+        # First survivor stores fresh, second dedupes (excluded from ids),
+        # third stores fresh — so stored_ids must be ["lib-1", "lib-3"].
+        returns = [
+            {"id": "lib-1", "embedded": True, "deduped": False},
+            {"id": "lib-2", "embedded": False, "deduped": True},
+            {"id": "lib-3", "embedded": True, "deduped": False},
+        ]
+        calls = iter(returns)
+
+        async def fake_store(meta, **k):
+            return next(calls)
+
+        with (
+            patch.object(acquire.brain, "get_pool", AsyncMock(return_value=object())),
+            patch.object(
+                acquire.sources,
+                "openalex_search_paged",
+                lambda *a, **k: (recs, False),
+            ),
+            patch.object(acquire.sources, "crossref_lookup", lambda *a, **k: None),
+            patch.object(acquire.venues_mod, "match", AsyncMock(return_value="AJAE")),
+            patch.object(acquire.brain, "store_acquired_paper", fake_store),
+        ):
+            report = await acquire.acquire("water demand", min_overlap=2)
+
+        self.assertEqual(report["stored"], 2)
+        self.assertEqual(report["stored_ids"], ["lib-1", "lib-3"])
+
 
 class CliTests(unittest.TestCase):
     def test_cli_query_library_runs(self):

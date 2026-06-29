@@ -674,6 +674,11 @@ class _PaperConnection:
             return {"id": "library-9", "title": args[0]}
         raise AssertionError(f"Unexpected query: {query}")
 
+    async def fetchval(self, query, *args):
+        # Venue registry lookup (venues.match) — unregistered venue → None, so the
+        # citekey falls back to a source-derived token.
+        return None
+
     async def execute(self, query, *args):
         self.execute_calls.append((query, args))
 
@@ -1443,6 +1448,42 @@ class CitekeyTests(unittest.TestCase):
 
     def test_three_or_more_authors_use_etal(self):
         self.assertEqual(brain.citekey(["A", "B", "C"], 2020, "WRR"), "A-ETAL-2020-WRR")
+
+    def test_falls_back_to_source_token_when_no_venue_abbrev(self):
+        # arXiv (single word) keeps its name+case instead of degrading to NA.
+        self.assertEqual(
+            brain.citekey(["Jane Smith"], 2026, None, "arXiv"),
+            "Smith-2026-arXiv",
+        )
+
+    def test_source_token_acronyms_multiword_venue(self):
+        self.assertEqual(
+            brain.citekey(
+                ["A", "B", "C"],
+                2018,
+                None,
+                "American Journal of Agricultural Economics",
+            ),
+            "A-ETAL-2018-AJAE",
+        )
+
+    def test_venue_abbrev_wins_over_source(self):
+        self.assertEqual(
+            brain.citekey(["Jane Smith"], 2021, "AJAE", "American Journal of Agricultural Economics"),
+            "Smith-2021-AJAE",
+        )
+
+    def test_na_only_when_no_venue_and_no_source(self):
+        self.assertEqual(brain.citekey(["Jane Smith"], 2021, None, None), "Smith-2021-NA")
+
+    def test_venue_token_helper(self):
+        self.assertEqual(brain._venue_token("arXiv"), "arXiv")
+        self.assertEqual(brain._venue_token("Science"), "Science")
+        self.assertEqual(
+            brain._venue_token("American Journal of Agricultural Economics"), "AJAE"
+        )
+        self.assertIsNone(brain._venue_token(None))
+        self.assertIsNone(brain._venue_token("   "))
 
     def test_render_bibtex_minimal(self):
         entry = brain._render_bibtex(

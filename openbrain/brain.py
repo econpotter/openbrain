@@ -1143,6 +1143,19 @@ def _source_slug(source: str) -> str:
     return "-".join(w[:4] for w in _clean_words(source))
 
 
+async def _resolve_venue_abbrev(
+    pool, *, name: str | None, issn_l: str | None = None, source_id: str | None = None
+) -> str | None:
+    """Canonical venue abbrev via the registry cascade (issn_l → source_id →
+    normalized name), or None when the venue is not in the registry.
+
+    None is intentional: the raw ``source`` name is stored regardless, so an
+    unregistered venue still surfaces in the uncategorized-venues list for
+    promotion, and the citekey falls back to a label derived from that name.
+    """
+    return await venues_mod.match(pool, issn_l=issn_l, source_id=source_id, name=name)
+
+
 def _author_slug(authors: list[str]) -> str:
     def last(name: str) -> str:
         return name.split(",")[0].strip() if "," in name else name.strip().split()[-1]
@@ -1489,12 +1502,15 @@ async def ingest_document_pipeline(
         dest = LIBRARY_PATH / f"{stem}-2{suffix}"
     shutil.copy2(str(path), str(dest))
 
+    venue_abbrev = await _resolve_venue_abbrev(pool, name=source)
+
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
             INSERT INTO library
-                (title, authors, year, source, doc_type, abstract, filepath, file_hash, doi, bibtex)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                (title, authors, year, source, doc_type, abstract, filepath,
+                 file_hash, doi, bibtex, venue_abbrev)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING id, title
             """,
             title,
@@ -1507,6 +1523,7 @@ async def ingest_document_pipeline(
             file_hash,
             doi,
             bibtex,
+            venue_abbrev,
         )
     library_id = row["id"]
 
@@ -1594,9 +1611,16 @@ async def _store_paper(
     pool = await get_pool()
     doi = meta.get("doi")
     abstract = meta.get("abstract")
+    # Store the RAW venue name (not the citekey filename slug — that corrupted the
+    # venue, e.g. "arXiv" → "arxi"). Resolve a canonical abbrev where the registry
+    # knows the venue; leave it NULL otherwise so it queues for promotion.
     source = meta.get("source")
-    if source:
-        source = _source_slug(source) or source
+    venue_abbrev = await _resolve_venue_abbrev(
+        pool,
+        name=source,
+        issn_l=meta.get("issn") or meta.get("issn_l"),
+        source_id=meta.get("venue_source_id"),
+    )
 
     if doi:
         async with pool.acquire() as conn:
@@ -1620,8 +1644,9 @@ async def _store_paper(
         row = await conn.fetchrow(
             """
             INSERT INTO library
-                (title, authors, year, source, doc_type, abstract, doi, bibtex)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                (title, authors, year, source, doc_type, abstract, doi, bibtex,
+                 issn, venue_source_id, venue_abbrev)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING id, title
             """,
             meta.get("title"),
@@ -1632,6 +1657,9 @@ async def _store_paper(
             abstract,
             doi,
             meta.get("bibtex"),
+            meta.get("issn") or meta.get("issn_l"),
+            meta.get("venue_source_id"),
+            venue_abbrev,
         )
     library_id = row["id"]
 
@@ -2012,7 +2040,7 @@ def _finding_source(row) -> dict:
     """Citation block for a finding's source paper (never a bare finding)."""
     authors = list(row["authors"] or [])
     return {
-        "citekey": citekey(authors, row["year"], row["venue_abbrev"]),
+        "citekey": citekey(authors, row["year"], row["venue_abbrev"], row.get("source")),
         "authors": authors,
         "year": row["year"],
         "title": row["title"],
@@ -2092,7 +2120,8 @@ async def search_findings(
             SELECT f.id AS finding_id, f.cause_text, f.effect_text, f.magnitude_value,
                    f.magnitude_unit, f.magnitude_stat, f.conditions, f.raw_quote,
                    f.confidence,
-                   l.id AS paper_id, l.title, l.authors, l.year, l.venue_abbrev, l.doi
+                   l.id AS paper_id, l.title, l.authors, l.year, l.venue_abbrev,
+                   l.source, l.doi
             FROM findings f
             JOIN library l ON l.id = f.paper_id
             {where}
@@ -2595,9 +2624,44 @@ def _last_name(name: str) -> str:
     return name.split()[-1]
 
 
-def citekey(authors: list[str], year: int | None, venue_abbrev: str | None) -> str:
-    """Stable citekey: <L1>-[<L2>|ETAL]-<YEAR>-<VENUE>."""
-    venue = venue_abbrev or "NA"
+_VENUE_STOP = frozenset({"of", "the", "and", "in", "for", "on", "a", "an"})
+
+
+def _venue_token(source: str | None) -> str | None:
+    """Compact, citekey-safe label from a raw venue name — the fallback when a
+    venue is not yet in the registry, so the citekey reads ``...-arXiv`` / ``...-AJAE``
+    instead of ``...-NA``. Single-word venues keep their name and case; multi-word
+    venues collapse to an initial-letter acronym. None when there is no source.
+
+    General by design: no per-venue special-casing. Any non-journal source (arXiv,
+    SSRN, NBER, a working-paper series) yields a usable token; the registry is the
+    place to promote it to a canonical abbrev later.
+    """
+    if not source:
+        return None
+    words = [
+        w for w in re.sub(r"[^\w\s]", " ", source).split() if w.lower() not in _VENUE_STOP
+    ]
+    if not words:
+        return None
+    if len(words) == 1:
+        return words[0]
+    return "".join(w[0].upper() for w in words)
+
+
+def citekey(
+    authors: list[str],
+    year: int | None,
+    venue_abbrev: str | None,
+    source: str | None = None,
+) -> str:
+    """Stable citekey: <L1>-[<L2>|ETAL]-<YEAR>-<VENUE>.
+
+    VENUE is the canonical registry abbrev when known; otherwise a compact label
+    derived from the raw ``source`` venue name (so a not-yet-registered venue still
+    yields a real citekey), and only ``NA`` when there is no venue at all.
+    """
+    venue = venue_abbrev or _venue_token(source) or "NA"
     if not authors:
         lead = "Unknown"
     elif len(authors) <= 2:
@@ -2640,7 +2704,10 @@ async def export_bibtex_records(
     out: list[str] = []
     for rec in rows:
         key = citekey(
-            rec.get("authors") or [], rec.get("year"), rec.get("venue_abbrev")
+            rec.get("authors") or [],
+            rec.get("year"),
+            rec.get("venue_abbrev"),
+            rec.get("source"),
         )
         if key in seen:
             seen[key] += 1

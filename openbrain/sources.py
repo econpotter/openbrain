@@ -278,6 +278,65 @@ def openalex_concepts(term: str, limit: int = 25) -> list[dict]:
     return out
 
 
+def _openalex_works_by_ids(ids: list[str]) -> list[dict]:
+    """Batch-fetch OpenAlex work records for short ids (W…), 50 per request via
+    the `openalex_id` filter. Missing ids are silently dropped by the API."""
+    records: list[dict] = []
+    for start in range(0, len(ids), 50):
+        batch = ids[start : start + 50]
+        data = _get_json(
+            "https://api.openalex.org/works?per-page=50"
+            "&mailto=open-brain@localhost"
+            "&filter=openalex_id:" + "|".join(batch)
+        )
+        if data:
+            records.extend(data.get("results", []))
+    return records
+
+
+def openalex_citation_neighbors(openalex_id: str) -> list[PaperMeta]:
+    """Citation neighbors of an OpenAlex work, deduplicated as PaperMeta.
+
+    Outbound edges come from the work's ``referenced_works`` ids (batch-fetched
+    into full records); inbound edges from the first page of its
+    ``cited_by_api_url``. References ∩ citing-works are deduplicated by the shared
+    DOI/arXiv/title key. Returns [] if the work cannot be fetched. Network calls
+    are monkeypatched in tests.
+    """
+    wid = openalex_id.replace("https://openalex.org/", "")
+    work = _get_json(
+        f"https://api.openalex.org/works/{urllib.parse.quote(wid)}"
+        "?mailto=open-brain@localhost"
+    )
+    if not work:
+        return []
+
+    works: list[dict] = []
+    ref_ids = [
+        r.replace("https://openalex.org/", "")
+        for r in (work.get("referenced_works") or [])
+    ]
+    if ref_ids:
+        works.extend(_openalex_works_by_ids(ref_ids))
+
+    cited_url = work.get("cited_by_api_url")
+    if cited_url:
+        data = _get_json(cited_url)
+        if data:
+            works.extend(data.get("results", []))
+
+    neighbors: list[PaperMeta] = []
+    seen: set[str] = set()
+    for w in works:
+        rec = _openalex_record(w)
+        key = _dedup_key(rec)
+        if key in seen:
+            continue
+        seen.add(key)
+        neighbors.append(rec)
+    return neighbors
+
+
 # ---------------------------------------------------------------------------
 # CrossRef
 # ---------------------------------------------------------------------------

@@ -134,6 +134,40 @@ class AcquireFieldCaptureTests(unittest.TestCase):
         self.assertEqual(rec["venue_source_id"], "S123")
         self.assertEqual(rec["concepts"], ["Water", "Demand"])
 
+    def test_citation_neighbors_merges_and_dedups(self):
+        def fake_get_json(url, headers=None):
+            if "works/W1" in url:
+                return {
+                    "referenced_works": ["https://openalex.org/W2"],
+                    "cited_by_api_url": "https://api.openalex.org/works?filter=cites:W1",
+                }
+            if "filter=openalex_id:W2" in url:
+                return {
+                    "results": [
+                        {"display_name": "Ref Paper", "doi": "https://doi.org/10.1/ref"}
+                    ]
+                }
+            if "cites:W1" in url:
+                return {
+                    "results": [
+                        {"display_name": "Citing", "doi": "https://doi.org/10.1/cite"},
+                        # Same DOI as the referenced work -> deduplicated away.
+                        {
+                            "display_name": "Ref again",
+                            "doi": "https://doi.org/10.1/ref",
+                        },
+                    ]
+                }
+            return None
+
+        with patch.object(sources, "_get_json", fake_get_json):
+            neighbors = sources.openalex_citation_neighbors("W1")
+        self.assertEqual([n["doi"] for n in neighbors], ["10.1/ref", "10.1/cite"])
+
+    def test_citation_neighbors_returns_empty_when_work_missing(self):
+        with patch.object(sources, "_get_json", lambda *a, **k: None):
+            self.assertEqual(sources.openalex_citation_neighbors("W404"), [])
+
     def test_crossref_record_captures_subject_and_issn(self):
         item = {
             "title": ["X"],

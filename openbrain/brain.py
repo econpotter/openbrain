@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -1632,6 +1633,69 @@ async def store_acquired_paper(meta: dict, *, force: bool = False) -> dict:
         "embedded": embedded,
         "deduped": False,
     }
+
+
+async def store_one(meta: dict) -> dict:
+    """Store a single paper's metadata, a thin wrapper over store_acquired_paper
+    for the external driver. Returns the {id, title, deduped} the driver needs to
+    track per-front membership; the embedded flag stays internal."""
+    stored = await store_acquired_paper(meta)
+    return {
+        "id": stored["id"],
+        "title": stored["title"],
+        "deduped": stored["deduped"],
+    }
+
+
+def _mean_vector(vectors: list[list[float]]) -> list[float]:
+    """Component-wise mean of equal-length vectors (the anchor centroid)."""
+    n = len(vectors)
+    dim = len(vectors[0])
+    return [sum(v[i] for v in vectors) / n for i in range(dim)]
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    """Cosine similarity via stdlib math; 0.0 if either vector has zero norm."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+async def relevance(
+    anchor_ids: list[str], candidate_texts: list[str]
+) -> list[float]:
+    """Score each candidate text by cosine similarity to the anchor centroid.
+
+    The centroid is the component-wise mean of the stored embeddings for the
+    anchor library ids (their abstract chunks); anchors lacking an embedding are
+    skipped. Each candidate text is embedded via `embed` and scored in input
+    order. Raises ValueError when no anchors are given or none has a usable
+    embedding — the driver's citation walk has no centroid to score against.
+    Embeddings never leave openbrain; only the cosines do.
+    """
+    if not anchor_ids:
+        raise ValueError("relevance requires at least one anchor id.")
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT c.embedding FROM chunks c "
+            "WHERE c.library_id = ANY($1::uuid[]) AND c.embedding IS NOT NULL",
+            anchor_ids,
+        )
+    vectors = [list(r["embedding"]) for r in rows if r["embedding"] is not None]
+    if not vectors:
+        raise ValueError("No stored embeddings for the given anchor ids.")
+
+    centroid = _mean_vector(vectors)
+    scores: list[float] = []
+    for text in candidate_texts:
+        emb = await embed(text, task="query")
+        scores.append(_cosine(centroid, emb))
+    return scores
 
 
 async def fetch_paper(

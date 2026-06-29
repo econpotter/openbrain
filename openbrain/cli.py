@@ -19,6 +19,7 @@ from rich.table import Table
 from openbrain import acquire as acquire_mod
 from openbrain import brain
 from openbrain import findings as findings_mod
+from openbrain import sources
 
 app = typer.Typer(help="openbrain library: ingest and deterministic acquisition.")
 console = Console()
@@ -243,6 +244,56 @@ def backfill_findings(
     """Extract findings for papers still pending (extraction model down at ingest)."""
     res = asyncio.run(findings_mod.backfill_findings(limit=limit))
     _emit(res)
+
+
+@app.command()
+def citations(
+    openalex_id: str = typer.Argument(..., help="OpenAlex work id (W… or full URL)"),
+):
+    """Citation neighbors (referenced + citing works) of an OpenAlex work."""
+    neighbors = sources.openalex_citation_neighbors(openalex_id)
+    _emit({"neighbors": neighbors})
+
+
+@app.command()
+def relevance(
+    anchor: list[str] = typer.Option(
+        ..., "--anchor", help="Anchor library id; repeatable"
+    ),
+    text: list[str] = typer.Option(
+        ..., "--text", help="Candidate text to score; repeatable"
+    ),
+):
+    """Cosine of each --text against the centroid of the --anchor papers."""
+    cosines = asyncio.run(brain.relevance(anchor, text))
+    _emit({"cosines": cosines})
+
+
+@app.command(name="store-paper")
+def store_paper(
+    json_meta: str = typer.Option(..., "--json", help="Paper metadata as JSON"),
+):
+    """Store one paper's metadata; emits {id, title, deduped}."""
+    meta = json.loads(json_meta)
+    result = asyncio.run(brain.store_one(meta))
+    _emit(result)
+
+
+@app.command(name="search-library")
+def search_library(
+    query: str = typer.Argument(..., help="Semantic search query"),
+    limit: int = typer.Option(10, "--limit", help="Max paper ids to return"),
+):
+    """Top-K semantic library hits, paper ids only."""
+    rows = asyncio.run(brain.search_library_vec(query, count=limit))
+    ids: list[str] = []
+    for r in rows:
+        lid = str(r["library_id"])
+        if lid not in ids:
+            ids.append(lid)
+        if len(ids) >= limit:
+            break
+    _emit({"ids": ids})
 
 
 if __name__ == "__main__":

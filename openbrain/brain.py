@@ -232,7 +232,12 @@ async def _embed_with_config(text: str, config: dict) -> list[float]:
             base_url=litellm_url,
             timeout=EMBED_TIMEOUT,
         )
-        result = await client.embeddings.create(input=[text], model=model)
+        # Send encoding_format explicitly: when omitted, litellm forwards
+        # encoding_format=null to the backend, and llama.cpp's /v1/embeddings
+        # does get<string> on it and 500s ("type must be string, but is null").
+        result = await client.embeddings.create(
+            input=[text], model=model, encoding_format="float"
+        )
         return result.data[0].embedding
 
     raise ValueError(

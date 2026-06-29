@@ -405,7 +405,8 @@ class ModelFallbackTests(unittest.IsolatedAsyncioTestCase):
                 created["timeout"] = timeout
                 self.embeddings = types.SimpleNamespace(create=self._create)
 
-            async def _create(self, input, model):
+            async def _create(self, input, model, encoding_format):
+                created["encoding_format"] = encoding_format
                 return types.SimpleNamespace(
                     data=[types.SimpleNamespace(embedding=[0.1, 0.2])]
                 )
@@ -429,6 +430,8 @@ class ModelFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, [0.1, 0.2])
         self.assertEqual(created["api_key"], "local-litellm")
         self.assertEqual(created["base_url"], "http://litellm:4000")
+        # Must be sent explicitly — llama.cpp 500s on the null litellm injects.
+        self.assertEqual(created["encoding_format"], "float")
 
     async def test_litellm_extraction_uses_local_placeholder_key(self):
         created = {}

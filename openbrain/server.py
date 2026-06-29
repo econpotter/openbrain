@@ -19,6 +19,7 @@ from openbrain.tools import (
     maintenance,
     acquire,
     findings,
+    driver,
 )
 
 
@@ -69,6 +70,7 @@ briefing.register(mcp)
 maintenance.register(mcp)
 acquire.register(mcp)
 findings.register(mcp)
+driver.register(mcp)
 resources.register(mcp)
 
 

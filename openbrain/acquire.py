@@ -171,6 +171,7 @@ async def acquire(
 
     # --- STORE (skip writes on dry_run) ---
     stored = 0
+    stored_ids: list[str] = []
     sample: list[dict] = []
     for rec in survivors:
         if len(sample) < 10:
@@ -185,12 +186,14 @@ async def acquire(
             result = await brain.store_acquired_paper(rec)
             if not result.get("deduped"):
                 stored += 1
+                stored_ids.append(result["id"])
 
     return {
         "found": found,
         "deduped": deduped,
         "prefiltered_out": reasons,
         "stored": stored,
+        "stored_ids": stored_ids,
         "truncated": truncated,
         "unknown_venues": unknown_venues,
         "sample": sample,

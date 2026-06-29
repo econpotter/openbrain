@@ -18,6 +18,7 @@ import shutil
 import socket
 import urllib.request
 import urllib.error
+from collections.abc import Callable
 from pathlib import Path
 
 import asyncpg
@@ -66,11 +67,13 @@ INGEST_STAGING_PATH: Path = Path(
     INGEST_CONFIG.get("staging_path", "/tmp/openbrain-ingest")
 ).expanduser()
 EXTRACTION_CONFIG: dict = _cfg.get("extraction", {})
+RERANK_CONFIG: dict = _cfg.get("rerank", {})
 
 # Per-request embedding timeout (seconds). Without it a dead or unsupported
 # endpoint (e.g. OpenRouter, which has no /embeddings route) hangs until the
 # default client timeout, blocking every capture. Override via embed.timeout.
 EMBED_TIMEOUT: float = float(_cfg.get("embed", {}).get("timeout", 30))
+RERANK_TIMEOUT: float = float(RERANK_CONFIG.get("timeout", 15))
 
 _STOPWORDS = frozenset(
     {
@@ -282,6 +285,101 @@ async def _embed_or_none(text: str, task: str = "document") -> list[float] | Non
     except Exception as exc:
         logger.warning("Embedding deferred (model unavailable): %s", exc)
         return None
+
+
+async def _rerank_with_config(
+    query: str, documents: list[str], top_n: int, config: dict
+) -> list[int]:
+    """Call a Cohere-style /rerank endpoint, returning candidate indices best-first.
+
+    Only the litellm provider is supported (the reranker is a local cross-encoder
+    served on moon8 via the litellm proxy). The response is the standard rerank
+    shape: {"results": [{"index": i, "relevance_score": s}, ...]} sorted desc.
+    """
+    provider = config["provider"]
+    model = config["model"]
+    if provider != "litellm":
+        raise ValueError(
+            f"Unknown rerank.provider: {provider!r}. Expected: litellm"
+        )
+    litellm_url = _litellm_url(config)
+    if not litellm_url:
+        raise ValueError(
+            "config.yaml: litellm_url is required when rerank.provider is litellm"
+        )
+
+    import httpx
+
+    api_key = os.environ.get("LITELLM_API_KEY", "local-litellm")
+    async with httpx.AsyncClient(timeout=RERANK_TIMEOUT) as client:
+        resp = await client.post(
+            f"{litellm_url.rstrip('/')}/rerank",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": model,
+                "query": query,
+                "documents": documents,
+                "top_n": top_n,
+            },
+        )
+        resp.raise_for_status()
+        results = resp.json()["results"]
+    return [r["index"] for r in results]
+
+
+async def rerank(query: str, documents: list[str], top_n: int) -> list[int] | None:
+    """Best-effort rerank: return candidate indices best-first, capped at top_n.
+
+    Returns None when reranking is disabled or every provider fails, so callers
+    fall back to the original (cosine) order rather than erroring — reranking is a
+    quality boost on retrieval, never a hard dependency of search.
+    """
+    if not RERANK_CONFIG.get("enabled") or not documents:
+        return None
+    top_n = min(top_n, len(documents))
+    errors = []
+    for config in _configs_with_fallback(RERANK_CONFIG):
+        try:
+            order = await asyncio.wait_for(
+                _rerank_with_config(query, documents, top_n, config),
+                timeout=RERANK_TIMEOUT + 5,
+            )
+            # Defend against an out-of-range index from a misbehaving backend.
+            return [i for i in order if 0 <= i < len(documents)][:top_n]
+        except Exception as exc:
+            errors.append(f"{config.get('provider')}/{config.get('model')}: {exc}")
+    logger.warning("Rerank unavailable, using cosine order: %s", "; ".join(errors))
+    return None
+
+
+def _candidate_count(count: int) -> int:
+    """Rows a semantic search should overfetch by cosine before the reranker trims
+    back to `count`. Equals `count` when reranking is off, so search behaves
+    identically (no wasted DB rows) without the reranker."""
+    if not RERANK_CONFIG.get("enabled"):
+        return count
+    return max(count, int(RERANK_CONFIG.get("candidates", count)))
+
+
+async def _reranked(
+    query: str,
+    rows: list[dict],
+    text_of: Callable[[dict], str],
+    count: int,
+) -> list[dict]:
+    """Reorder cosine candidates by the cross-encoder and trim to `count`.
+
+    The single rerank seam shared by every semantic search: overfetch with
+    `_candidate_count`, hand the rows here. Falls back to cosine order (truncated)
+    whenever `rerank()` returns None — disabled or reranker unavailable — so a
+    reranker outage degrades quality, never breaks search.
+    """
+    if not RERANK_CONFIG.get("enabled") or not rows:
+        return rows[:count]
+    order = await rerank(query, [text_of(r) for r in rows], count)
+    if order is None:
+        return rows[:count]
+    return [rows[i] for i in order]
 
 
 async def _enriched_entity_text(table: str, entity_id: str) -> str:
@@ -553,9 +651,9 @@ async def search_thoughts_vec(
             "SELECT * FROM match_thoughts($1, $2, $3)",
             embedding,
             threshold,
-            count,
+            _candidate_count(count),
         )
-    return [dict(r) for r in rows]
+    return await _reranked(query, [dict(r) for r in rows], lambda r: r["content"], count)
 
 
 async def get_thought_connections(
@@ -902,9 +1000,17 @@ async def search_people_vec(
     embedding = await embed(query, task="query")
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT * FROM match_people($1, $2, $3)", embedding, threshold, count
+            "SELECT * FROM match_people($1, $2, $3)",
+            embedding,
+            threshold,
+            _candidate_count(count),
         )
-    return [dict(r) for r in rows]
+    return await _reranked(
+        query,
+        [dict(r) for r in rows],
+        lambda r: " ".join(filter(None, (r["name"], r["affiliation"], r["notes"]))),
+        count,
+    )
 
 
 async def find_person_by_name(name: str) -> list[dict]:
@@ -968,9 +1074,17 @@ async def search_projects_vec(
     embedding = await embed(query, task="query")
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT * FROM match_projects($1, $2, $3)", embedding, threshold, count
+            "SELECT * FROM match_projects($1, $2, $3)",
+            embedding,
+            threshold,
+            _candidate_count(count),
         )
-    return [dict(r) for r in rows]
+    return await _reranked(
+        query,
+        [dict(r) for r in rows],
+        lambda r: " ".join(filter(None, (r["name"], r["description"]))),
+        count,
+    )
 
 
 async def find_project_by_name(name: str) -> list[dict]:
@@ -1867,7 +1981,7 @@ async def search_library_vec(
         p += 1
 
     where = " AND ".join(conditions)
-    params.append(count)
+    params.append(_candidate_count(count))
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -1884,7 +1998,9 @@ async def search_library_vec(
             """,
             *params,
         )
-    return [dict(r) for r in rows]
+    return await _reranked(
+        query, [dict(r) for r in rows], lambda r: r["chunk_text"], count
+    )
 
 
 def _finding_source(row) -> dict:
@@ -2068,6 +2184,8 @@ async def search_brain(
     embedding = await embed(query, task="query")
     words = [w for w in re.sub(r"[^\w\s]", "", query).split() if len(w) > 2]
     fts_query = " | ".join(words) if words else query[:50]
+    # Overfetch by cosine so the reranker has a candidate pool (no-op when off).
+    fetch_n = _candidate_count(count)
 
     async def _thoughts():
         async with pool.acquire() as conn:
@@ -2087,7 +2205,7 @@ async def search_brain(
                 embedding,
                 fts_query,
                 threshold,
-                count,
+                fetch_n,
             )
         return [dict(r) for r in rows]
 
@@ -2121,11 +2239,16 @@ async def search_brain(
                 embedding,
                 fts_query,
                 threshold,
-                count,
+                fetch_n,
             )
         return [dict(r) for r in rows]
 
     thoughts, library = await asyncio.gather(_thoughts(), _library())
+
+    thoughts, library = await asyncio.gather(
+        _reranked(query, thoughts, lambda r: r["content"], count),
+        _reranked(query, library, lambda r: r["chunk_text"], count),
+    )
     cooc = _extract_cooccurrences(thoughts, exclude="")
 
     return {

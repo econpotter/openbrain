@@ -41,6 +41,17 @@ embed:
   document_prefix: "search_document: "
   query_prefix: "search_query: "
 
+rerank:
+  # Cross-encoder reranking of search candidates: cosine retrieves a candidate
+  # pool, the reranker reorders it, search returns the top `count`. Served on moon8
+  # via the litellm /rerank endpoint. Best-effort — if disabled or the model is
+  # unavailable, search falls back to cosine order and never errors.
+  enabled: true
+  provider: litellm
+  model: bge-reranker
+  candidates: 30   # how many cosine hits to overfetch before reranking down to count
+  timeout: 15
+
 chunk:
   # Body-text chunking for file ingest (fetch_paper stores the abstract as a
   # single chunk and ignores this). Text is split on detected section headings;
@@ -64,15 +75,20 @@ paper_sources:
 
 extraction:
   # Provider: openrouter | litellm
+  # Findings extraction is accuracy-critical and batch (latency-tolerant), so it
+  # runs on a cloud model, not the small local moon8-fast (reserved for fast sync
+  # agents). Routed through litellm so the OpenRouter key lives only in the proxy.
+  # deepseek-v4-flash is cheap + strong at structured JSON; gemini-3.5-flash is the
+  # fallback if deepseek returns off-schema.
   provider: litellm
-  model: moon8-fast
+  model: deepseek-v4-flash
   # Structured single-shot extraction: 0.0 for stable, schema-faithful output (no
   # sampling/voting, so randomness is pure downside). Not bit-reproducible (API), but
   # most stable. Raise only if you add multi-sample self-consistency.
   temperature: 0.0
   fallback:
-    provider: openrouter
-    model: deepseek/deepseek-v4-flash
+    provider: litellm
+    model: gemini-3.5-flash
   run_at: "18:00"
   lookback_hours: 24
   batch_size: 50

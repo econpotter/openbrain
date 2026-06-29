@@ -1497,3 +1497,99 @@ class StoreOneTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(brain, "store_acquired_paper", fake_store):
             out = await brain.store_one({"title": "A Paper"})
         self.assertEqual(out, {"id": "lib-9", "title": "A Paper", "deduped": False})
+
+
+class RerankTests(unittest.IsolatedAsyncioTestCase):
+    _CFG = {"enabled": True, "provider": "litellm", "model": "bge-reranker"}
+
+    async def test_disabled_returns_none(self):
+        with patch.object(brain, "RERANK_CONFIG", {"enabled": False}):
+            self.assertIsNone(await brain.rerank("q", ["a", "b"], 2))
+
+    async def test_empty_documents_returns_none(self):
+        with patch.object(brain, "RERANK_CONFIG", self._CFG):
+            self.assertIsNone(await brain.rerank("q", [], 5))
+
+    async def test_reorders_and_caps_to_top_n(self):
+        async def fake(query, documents, top_n, config):
+            return [2, 0, 1]
+
+        with (
+            patch.object(brain, "RERANK_CONFIG", self._CFG),
+            patch.object(brain, "_rerank_with_config", fake),
+        ):
+            order = await brain.rerank("q", ["a", "b", "c"], 2)
+        self.assertEqual(order, [2, 0])
+
+    async def test_drops_out_of_range_index(self):
+        async def fake(query, documents, top_n, config):
+            return [5, 1, 0]  # 5 is out of range for 2 documents
+
+        with (
+            patch.object(brain, "RERANK_CONFIG", self._CFG),
+            patch.object(brain, "_rerank_with_config", fake),
+        ):
+            order = await brain.rerank("q", ["a", "b"], 2)
+        self.assertEqual(order, [1, 0])
+
+    async def test_falls_back_to_none_on_error(self):
+        async def boom(*args, **kwargs):
+            raise RuntimeError("reranker down")
+
+        with (
+            patch.object(brain, "RERANK_CONFIG", self._CFG),
+            patch.object(brain, "_rerank_with_config", boom),
+        ):
+            self.assertIsNone(await brain.rerank("q", ["a", "b"], 2))
+
+    async def test_uses_fallback_provider(self):
+        cfg = {
+            "enabled": True,
+            "provider": "litellm",
+            "model": "primary",
+            "fallback": {"provider": "litellm", "model": "secondary"},
+        }
+        calls = []
+
+        async def fake(query, documents, top_n, config):
+            calls.append(config["model"])
+            if config["model"] == "primary":
+                raise RuntimeError("down")
+            return [0, 1]
+
+        with (
+            patch.object(brain, "RERANK_CONFIG", cfg),
+            patch.object(brain, "_rerank_with_config", fake),
+        ):
+            order = await brain.rerank("q", ["a", "b"], 2)
+        self.assertEqual(order, [0, 1])
+        self.assertEqual(calls, ["primary", "secondary"])
+
+    def test_candidate_count_overfetches_only_when_enabled(self):
+        with patch.object(brain, "RERANK_CONFIG", {"enabled": False}):
+            self.assertEqual(brain._candidate_count(5), 5)
+        with patch.object(
+            brain, "RERANK_CONFIG", {"enabled": True, "candidates": 30}
+        ):
+            self.assertEqual(brain._candidate_count(5), 30)
+            self.assertEqual(brain._candidate_count(40), 40)  # count beats candidates
+
+    async def test_reranked_reorders_rows_via_text_of(self):
+        rows = [{"t": "a"}, {"t": "b"}, {"t": "c"}]
+
+        async def fake(query, documents, top_n, config):
+            self.assertEqual(documents, ["a", "b", "c"])  # text_of applied
+            return [2, 0]
+
+        with (
+            patch.object(brain, "RERANK_CONFIG", self._CFG),
+            patch.object(brain, "_rerank_with_config", fake),
+        ):
+            out = await brain._reranked("q", rows, lambda r: r["t"], 2)
+        self.assertEqual(out, [{"t": "c"}, {"t": "a"}])
+
+    async def test_reranked_falls_back_to_cosine_order(self):
+        rows = [{"t": "a"}, {"t": "b"}, {"t": "c"}]
+        with patch.object(brain, "RERANK_CONFIG", {"enabled": False}):
+            out = await brain._reranked("q", rows, lambda r: r["t"], 2)
+        self.assertEqual(out, [{"t": "a"}, {"t": "b"}])  # cosine order, trimmed

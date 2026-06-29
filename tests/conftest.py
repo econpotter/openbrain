@@ -26,3 +26,10 @@ bibtexparser.loads = lambda _: types.SimpleNamespace(entries=[])
 sys.modules.setdefault("bibtexparser", bibtexparser)
 
 os.environ.setdefault("DATABASE_URL", "postgresql://test/openbrain")
+
+# Default reranking OFF for the suite: it's an opt-in feature whose live config
+# (config.yaml) ships enabled, but search tests assert cosine behaviour and must
+# not make real /rerank calls. RerankTests re-enable it per-test via patch.object.
+from openbrain import brain  # noqa: E402
+
+brain.RERANK_CONFIG = {}

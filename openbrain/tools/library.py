@@ -187,45 +187,6 @@ def register(mcp):
                     lines.append(f"- fetched: {title} ({note})")
             return "\n".join(lines)
 
-        if not identifier and not identifiers and not topic:
-            return "Supply identifier (DOI/arXiv/title), identifiers (list), or topic."
-        source_order = [s.strip() for s in sources.split(",")] if sources else None
-
-        if identifiers:
-            batch = await brain.fetch_papers(
-                identifiers=identifiers,
-                doc_type=doc_type,
-                source_order=source_order,
-                force=force,
-            )
-            s = batch["summary"]
-            lines = [
-                f"Batch fetch: {s['fetched']} fetched, {s['deduped']} already in "
-                f"library, {s['not_found']} not found "
-                f"(of {s['requested']} requested)."
-            ]
-            if s["abstracts_deferred"]:
-                lines.append(
-                    f"{s['abstracts_deferred']} abstract(s) stored without an "
-                    "embedding (model unavailable) — run backfill_embeddings later."
-                )
-            for r in batch["results"]:
-                ident = r["identifier"]
-                if not r.get("found"):
-                    lines.append(f"- not found: {ident}")
-                elif r.get("deduped"):
-                    lines.append(f"- already in library: {r.get('title') or ident}")
-                else:
-                    title = r.get("title") or ident
-                    if not r["abstract_stored"]:
-                        note = "no abstract"
-                    elif r.get("embedded"):
-                        note = "embedded"
-                    else:
-                        note = "embedding deferred"
-                    lines.append(f"- fetched: {title} ({note})")
-            return "\n".join(lines)
-
         result = await brain.fetch_paper(
             identifier=identifier,
             topic=topic,

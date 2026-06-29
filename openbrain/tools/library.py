@@ -3,6 +3,7 @@ tools/library.py — ingest_document, ingest_directory, search_library,
                    update_library, update_library_status tools.
 """
 
+import json
 from pathlib import Path
 
 from openbrain import brain
@@ -332,10 +333,10 @@ def register(mcp):
     @mcp.tool
     async def search_library(
         query: str,
+        limit: int = 10,
         year_min: int | None = None,
         doc_type: str | None = None,
         threshold: float = 0.4,
-        count: int = 10,
     ) -> str:
         """
         Semantic search over the document library.
@@ -343,39 +344,44 @@ def register(mcp):
         Use this when the user asks about papers, reports, documentation, or
         document text. Use get_library_record for metadata about a known record.
 
-        Returns ranked results with title, authors, year, and the matching excerpt.
+        Returns a JSON object with `ids` (distinct library paper ids in rank
+        order, top-`limit`, for the external driver) and `results` (the matching
+        records with title, authors, year, similarity, and the matching excerpt
+        for a person to read). Empty matches give `{"ids": [], "results": []}`.
 
         Args:
             query:     Natural-language search query.
+            limit:     Maximum distinct papers to return. Default 10.
             year_min:  Only include documents from this year or later.
             doc_type:  Filter by type — paper | report | documentation | etc.
             threshold: Minimum similarity score (0–1). Default 0.4.
-            count:     Maximum results to return. Default 10.
         """
-        results = await brain.search_library_vec(
-            query, threshold, count, year_min, doc_type
+        rows = await brain.search_library_vec(
+            query, threshold, limit, year_min, doc_type
         )
-        if not results:
-            return "No results found."
-        lines = []
-        for r in results:
-            score = f"{r['similarity']:.2f}"
-            authors = r["authors"] or []
-            author_str = " & ".join(authors[:2]) + (
-                " et al." if len(authors) > 2 else ""
+        ids: list[str] = []
+        results = []
+        for r in rows:
+            lid = str(r["library_id"])
+            if lid not in ids:
+                ids.append(lid)
+            results.append(
+                {
+                    "id": lid,
+                    "title": r["title"],
+                    "authors": r["authors"] or [],
+                    "year": r["year"],
+                    "source": r["source"],
+                    "similarity": r["similarity"],
+                    "section": r.get("section"),
+                    "excerpt": r["chunk_text"][:300].replace("\n", " "),
+                }
             )
-            header = f"[{score}] {r['title']}"
-            if author_str:
-                header += f" — {author_str}"
-            if r["year"]:
-                header += f" ({r['year']})"
-            if r["source"]:
-                header += f" [{r['source']}]"
-            snippet = r["chunk_text"][:300].replace("\n", " ")
-            section = r.get("section")
-            snippet = f"[{section}] {snippet}" if section else snippet
-            lines.append(f"{header}\n  {snippet}")
-        return "\n\n".join(lines)
+            if len(ids) >= limit:
+                break
+        return json.dumps(
+            {"ids": ids, "results": results}, indent=2, default=str
+        )
 
     @mcp.tool
     async def get_library_record(query: str) -> str:

@@ -1,5 +1,5 @@
 """
-tools/library.py — ingest_document, ingest_directory, search_library,
+tools/library.py — ingest_document, ingest_directory, find_papers,
                    update_library, update_library_status tools.
 """
 
@@ -135,7 +135,7 @@ def register(mcp):
         Three modes:
           - Lookup: supply identifier (DOI, arXiv ID, or title/author text). Resolves
             one paper across sources, stores it as a library record, and embeds the
-            abstract so it becomes semantically searchable via search_library.
+            abstract so it becomes semantically searchable via find_papers.
           - Batch: supply identifiers (a list of DOIs/arXiv IDs/titles). Each is looked
             up and stored independently; one bad identifier does not abort the rest.
             Returns a per-item summary.
@@ -302,40 +302,85 @@ def register(mcp):
         return "\n".join(lines)
 
     @mcp.tool
-    async def search_library(
-        query: str,
+    async def find_papers(
+        text: str | None = None,
+        ids: str | None = None,
+        doi: str | None = None,
+        title: str | None = None,
+        journal: str | None = None,
+        authors: str | None = None,
+        year: int | None = None,
         limit: int = 10,
         year_min: int | None = None,
         doc_type: str | None = None,
         threshold: float = 0.4,
     ) -> str:
         """
-        Semantic search over the document library.
+        Topical/semantic search over the library — "papers related to X".
 
-        Use this when the user asks about papers, reports, documentation, or
-        document text. Use get_papers for metadata about a known record.
+        Anchor it one of three ways (precedence: ids > reference > text):
+          - text: a natural-language topic ("water economics").
+          - ids: comma-separated library paper ids — returns papers similar to
+            those (their centroid), excluding the anchors themselves.
+          - reference: doi/title/journal/authors/year — resolves the known
+            paper(s) (via get_papers' resolver) and anchors on them.
 
-        Returns a JSON object with `ids` (distinct library paper ids in rank
-        order, top-`limit`, for the external driver) and `results` (the matching
-        records with title, authors, year, similarity, and the matching excerpt
-        for a person to read). Empty matches give `{"ids": [], "results": []}`.
+        Use get_papers when you know *which* paper you want (deterministic).
+
+        Returns JSON: `anchors` (resolved anchor papers, [] for text mode),
+        `ids` (distinct library ids in rank order), and `results` (matching
+        records with title, authors, year, similarity, and an excerpt).
 
         Args:
-            query:     Natural-language search query.
-            limit:     Maximum distinct papers to return. Default 10.
-            year_min:  Only include documents from this year or later.
-            doc_type:  Filter by type — paper | report | documentation | etc.
-            threshold: Minimum similarity score (0–1). Default 0.4.
+            text:      Natural-language topic query.
+            ids:       Comma-separated library paper ids to anchor on.
+            doi/title/journal/authors/year: Bibliographic reference to anchor on.
+            limit:     Max distinct papers. Default 10.
+            year_min:  Only documents from this year or later.
+            doc_type:  Filter by type (paper | report | documentation | …).
+            threshold: Minimum similarity (0–1). Default 0.4.
         """
-        rows = await brain.search_library_vec(
-            query, threshold, limit, year_min, doc_type
-        )
-        ids: list[str] = []
+        anchors: list[dict] = []
+        anchor_ids: list[str] | None = None
+
+        if ids:
+            anchor_ids = [s.strip() for s in ids.split(",") if s.strip()]
+        elif any(v is not None for v in (doi, title, journal, authors, year)):
+            author_list = (
+                [a.strip() for a in authors.split(",") if a.strip()]
+                if authors
+                else None
+            )
+            anchors = await brain.resolve_reference(
+                doi=doi, title=title, journal=journal, authors=author_list, year=year
+            )
+            if not anchors:
+                return "No library record matched the reference; nothing to anchor on."
+            anchor_ids = [str(a["id"]) for a in anchors]
+
+        if anchor_ids:
+            try:
+                rows = await brain.search_library_by_anchors(
+                    anchor_ids, threshold, limit, year_min, doc_type
+                )
+            except ValueError as exc:
+                return f"Cannot find related papers: {exc}"
+        elif text:
+            rows = await brain.search_library_vec(
+                text, threshold, limit, year_min, doc_type
+            )
+        else:
+            return (
+                "Provide text, ids, or a bibliographic reference "
+                "(doi/title/journal/authors/year)."
+            )
+
+        result_ids: list[str] = []
         results = []
         for r in rows:
             lid = str(r["library_id"])
-            if lid not in ids:
-                ids.append(lid)
+            if lid not in result_ids:
+                result_ids.append(lid)
             results.append(
                 {
                     "id": lid,
@@ -348,11 +393,18 @@ def register(mcp):
                     "excerpt": r["chunk_text"][:300].replace("\n", " "),
                 }
             )
-            if len(ids) >= limit:
+            if len(result_ids) >= limit:
                 break
-        return json.dumps(
-            {"ids": ids, "results": results}, indent=2, default=str
-        )
+
+        payload = {
+            "anchors": [
+                {"id": str(a["id"]), "title": a["title"], "year": a["year"]}
+                for a in anchors
+            ],
+            "ids": result_ids,
+            "results": results,
+        }
+        return json.dumps(payload, indent=2, default=str)
 
     @mcp.tool
     async def get_papers(

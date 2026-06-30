@@ -2032,20 +2032,20 @@ async def backfill_chunk_embeddings(limit: int = 500) -> dict:
     }
 
 
-async def search_library_vec(
-    query: str,
-    threshold: float = 0.4,
-    count: int = 10,
-    year_min: int | None = None,
-    doc_type: str | None = None,
+async def _search_chunks_by_vector(
+    embedding,
+    threshold: float,
+    count: int,
+    year_min: int | None,
+    doc_type: str | None,
+    exclude_ids: list[str] | None = None,
 ) -> list[dict]:
+    """Core nearest-chunk search by a precomputed embedding vector. No rerank
+    (callers that have query text rerank the returned rows themselves)."""
     pool = await get_pool()
-    embedding = await embed(query, task="query")
-
     conditions = ["c.embedding IS NOT NULL", "1 - (c.embedding <=> $1) > $2"]
     params: list = [embedding, threshold]
     p = 3
-
     if year_min is not None:
         conditions.append(f"l.year >= ${p}")
         params.append(year_min)
@@ -2054,10 +2054,12 @@ async def search_library_vec(
         conditions.append(f"l.doc_type = ${p}")
         params.append(doc_type)
         p += 1
-
+    if exclude_ids:
+        conditions.append(f"l.id != ALL(${p}::uuid[])")
+        params.append(list(exclude_ids))
+        p += 1
     where = " AND ".join(conditions)
     params.append(_candidate_count(count))
-
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             f"""
@@ -2073,8 +2075,49 @@ async def search_library_vec(
             """,
             *params,
         )
-    return await _reranked(
-        query, [dict(r) for r in rows], lambda r: r["chunk_text"], count
+    return [dict(r) for r in rows]
+
+
+async def search_library_vec(
+    query: str,
+    threshold: float = 0.4,
+    count: int = 10,
+    year_min: int | None = None,
+    doc_type: str | None = None,
+) -> list[dict]:
+    embedding = await embed(query, task="query")
+    rows = await _search_chunks_by_vector(
+        embedding, threshold, count, year_min, doc_type
+    )
+    return await _reranked(query, rows, lambda r: r["chunk_text"], count)
+
+
+async def search_library_by_anchors(
+    anchor_ids: list[str],
+    threshold: float = 0.4,
+    count: int = 10,
+    year_min: int | None = None,
+    doc_type: str | None = None,
+) -> list[dict]:
+    """Centroid of the anchors' stored chunk embeddings -> nearest library
+    chunks, excluding the anchors themselves. No cross-encoder rerank: a
+    centroid has no query text. Raises ValueError when no anchor ids are given
+    or none has a usable embedding."""
+    if not anchor_ids:
+        raise ValueError("search_library_by_anchors requires at least one anchor id.")
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT c.embedding FROM chunks c "
+            "WHERE c.library_id = ANY($1::uuid[]) AND c.embedding IS NOT NULL",
+            list(anchor_ids),
+        )
+    vectors = [list(r["embedding"]) for r in rows if r["embedding"] is not None]
+    if not vectors:
+        raise ValueError("No stored embeddings for the given anchor ids.")
+    centroid = _mean_vector(vectors)
+    return await _search_chunks_by_vector(
+        centroid, threshold, count, year_min, doc_type, exclude_ids=list(anchor_ids)
     )
 
 

@@ -5,7 +5,7 @@ functions directly against a fake MCP and monkeypatched brain/sources, so no
 live network or database is touched. The result keys must match the
 agentic-researcher Openbrain client contract exactly: get_citations ->
 {citations}, score_relevance -> {scores}, store_paper -> {id, title, deduped},
-search_library -> {ids}.
+find_papers -> {ids}.
 """
 
 import asyncio
@@ -133,7 +133,7 @@ class SearchLibraryIdsTests(unittest.TestCase):
             "openbrain.brain.search_library_vec",
             new=AsyncMock(return_value=rows),
         ) as vec:
-            out = asyncio.run(tools["search_library"]("q", limit=10))
+            out = asyncio.run(tools["find_papers"]("q", limit=10))
         vec.assert_awaited_once_with("q", 0.4, 10, None, None)
         data = json.loads(out)
         self.assertEqual(data["ids"], ["id1", "id2"])
@@ -146,7 +146,7 @@ class SearchLibraryIdsTests(unittest.TestCase):
             "openbrain.brain.search_library_vec",
             new=AsyncMock(return_value=rows),
         ):
-            out = asyncio.run(tools["search_library"]("q", limit=1))
+            out = asyncio.run(tools["find_papers"]("q", limit=1))
         self.assertEqual(json.loads(out)["ids"], ["id1"])
 
     def test_empty_matches_give_empty_ids(self):
@@ -155,8 +155,8 @@ class SearchLibraryIdsTests(unittest.TestCase):
             "openbrain.brain.search_library_vec",
             new=AsyncMock(return_value=[]),
         ):
-            out = asyncio.run(tools["search_library"]("q"))
-        self.assertEqual(json.loads(out), {"ids": [], "results": []})
+            out = asyncio.run(tools["find_papers"]("q"))
+        self.assertEqual(json.loads(out), {"anchors": [], "ids": [], "results": []})
 
 
 if __name__ == "__main__":

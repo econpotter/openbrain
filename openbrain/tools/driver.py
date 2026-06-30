@@ -10,7 +10,7 @@ leave openbrain; `score_relevance` returns cosines, not vectors.
 Each tool returns a JSON string whose keys match the agentic-researcher Openbrain
 client contract exactly: get_citations -> {citations}, score_relevance ->
 {scores}, store_paper -> {id, title, deduped}. The id-returning library search
-lives in tools/library.py as `search_library` -> {ids}.
+lives in tools/library.py as `find_papers` -> {ids}.
 """
 
 import asyncio

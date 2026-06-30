@@ -7,7 +7,7 @@ openbrain tool guide
 
 Default retrieval:
 - Use search_brain for broad "what do I know about X?" questions.
-- Use search_library for document text.
+- Use find_papers for document text.
 - Use get_papers for document metadata, status, DOI, and filepath.
 - Use get_person or get_project for known entity profiles.
 - Use get_briefing for "today", "this week", and follow-up context.

@@ -1886,6 +1886,61 @@ class StorePapersWrapTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class _DeleteConnection:
+    def __init__(self, row=None):
+        self.row = row
+        self.executed = []
+
+    async def fetchrow(self, query, *args):
+        return self.row
+
+    async def execute(self, query, *args):
+        self.executed.append((query, args))
+
+
+class DeletePaperTests(unittest.IsolatedAsyncioTestCase):
+    async def test_deletes_by_uuid(self):
+        conn = _DeleteConnection(row={"id": "u-1", "title": "T"})
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
+            res = await brain.delete_paper(paper_id="11111111-1111-1111-1111-111111111111")
+        self.assertEqual(res, {"deleted": 1, "id": "u-1", "title": "T"})
+
+    async def test_uuid_no_match(self):
+        conn = _DeleteConnection(row=None)
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
+            res = await brain.delete_paper(paper_id="11111111-1111-1111-1111-111111111111")
+        self.assertEqual(res, {"deleted": 0, "reason": "no match"})
+
+    async def test_deletes_by_reference_single_match(self):
+        conn = _DeleteConnection()
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))),
+            patch.object(
+                brain, "resolve_reference",
+                AsyncMock(return_value=[{"id": "u-9", "title": "A Paper"}]),
+            ),
+        ):
+            res = await brain.delete_paper(title="A Paper")
+        self.assertEqual(res, {"deleted": 1, "id": "u-9", "title": "A Paper"})
+        self.assertTrue(any("DELETE FROM library" in q for q, _ in conn.executed))
+
+    async def test_refuses_ambiguous_reference(self):
+        conn = _DeleteConnection()
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))),
+            patch.object(
+                brain, "resolve_reference",
+                AsyncMock(return_value=[
+                    {"id": "u-1", "title": "A"}, {"id": "u-2", "title": "B"},
+                ]),
+            ),
+        ):
+            res = await brain.delete_paper(title="shared")
+        self.assertEqual(res["deleted"], 0)
+        self.assertEqual({m["id"] for m in res["multiple"]}, {"u-1", "u-2"})
+        self.assertEqual(conn.executed, [])  # nothing deleted
+
+
 class RerankTests(unittest.IsolatedAsyncioTestCase):
     _CFG = {"enabled": True, "provider": "litellm", "model": "bge-reranker"}
 

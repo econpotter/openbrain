@@ -1,7 +1,7 @@
 """
 tools/acquire.py — MCP tools for deterministic library browsing and export:
 structured query + affordances (query_library, coverage, list_venues,
-list_concepts, remove_record) and bibtex export. All return JSON-friendly text
+list_concepts, remove_paper) and bibtex export. All return JSON-friendly text
 so an external agent drives the loop without parsing prose.
 
 Bulk paper acquisition lives in fetch_papers/store_papers (tools/library.py,
@@ -78,11 +78,36 @@ def register(mcp):
         return json.dumps(concepts, indent=2, default=str)
 
     @mcp.tool
-    async def remove_record(query: str) -> str:
-        """Delete a single library record resolved by `query` (title/author/doi).
-        Refuses when the query is ambiguous. The post-hoc prune for stored
-        false-positives — judgment stays with the agent, execution here."""
-        result = await brain.delete_library_record(query)
+    async def remove_paper(
+        id: str | None = None,
+        doi: str | None = None,
+        title: str | None = None,
+        journal: str | None = None,
+        authors: str | None = None,
+        year: int | None = None,
+    ) -> str:
+        """Delete one library record — by `id` (the uuid get_papers/find_papers/
+        store_papers return) or by bibliographic reference (doi/title/journal/
+        authors/year, matched deterministically like get_papers, tolerant of
+        slight title misspellings). Refuses an ambiguous reference (>1 match) so
+        the wrong paper is never deleted. The post-hoc prune for stored
+        false-positives — judgment stays with the agent, execution here.
+
+        Args:
+            id:      Library uuid (exact). Preferred when you have it.
+            doi/title/journal/authors/year: Bibliographic reference to resolve.
+        """
+        author_list = (
+            [a.strip() for a in authors.split(",") if a.strip()] if authors else None
+        )
+        result = await brain.delete_paper(
+            paper_id=id,
+            doi=doi,
+            title=title,
+            journal=journal,
+            authors=author_list,
+            year=year,
+        )
         return json.dumps(result, indent=2, default=str)
 
     @mcp.tool

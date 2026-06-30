@@ -2864,16 +2864,41 @@ async def list_unknown_venues(limit: int = 50) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-async def delete_library_record(query: str) -> dict:
-    """Resolve a single library record by query and delete it. Refuses when the
-    query is ambiguous (multiple matches) or matches nothing."""
-    matches = await find_library_records(query)
+async def delete_paper(
+    *,
+    paper_id: str | None = None,
+    doi: str | None = None,
+    title: str | None = None,
+    journal: str | None = None,
+    authors=None,
+    year: int | None = None,
+) -> dict:
+    """Delete one library record — by uuid (`paper_id`) or by deterministic
+    bibliographic reference (the same resolver `get_papers` uses). Refuses when a
+    reference is ambiguous (>1 match) or matches nothing, so the wrong paper is
+    never deleted."""
+    pool = await get_pool()
+    if paper_id:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "DELETE FROM library WHERE id = $1::uuid RETURNING id, title",
+                paper_id,
+            )
+        if row:
+            return {"deleted": 1, "id": str(row["id"]), "title": row["title"]}
+        return {"deleted": 0, "reason": "no match"}
+
+    matches = await resolve_reference(
+        doi=doi, title=title, journal=journal, authors=authors, year=year
+    )
     if not matches:
         return {"deleted": 0, "reason": "no match"}
     if len(matches) > 1:
-        return {"deleted": 0, "multiple": [r["title"] for r in matches]}
+        return {
+            "deleted": 0,
+            "multiple": [{"id": str(m["id"]), "title": m["title"]} for m in matches],
+        }
     rec = matches[0]
-    pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute("DELETE FROM library WHERE id = $1", rec["id"])
     return {"deleted": 1, "id": str(rec["id"]), "title": rec["title"]}

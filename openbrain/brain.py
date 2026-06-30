@@ -2355,6 +2355,7 @@ def _surnames(authors) -> set[str]:
 
 async def resolve_reference(
     *,
+    paper_id: str | None = None,
     doi: str | None = None,
     title: str | None = None,
     journal: str | None = None,
@@ -2362,14 +2363,22 @@ async def resolve_reference(
     year: int | None = None,
     min_score: float | None = None,
 ) -> list[dict]:
-    """Deterministic reference -> library rows. DOI exact when present; otherwise
-    a conjunction of normalized fields: a fuzzy title match (the shared
-    sources._score_candidate scorer + threshold, so misspellings still resolve),
-    plus author-surname and year/journal corroboration. "Deterministic" means
-    rule-based and repeatable — a fixed scorer + fixed threshold, not embeddings.
-    Returns 0, 1, or many rows ranked by score; the caller decides what to do
-    with ambiguity (never auto-picks here)."""
+    """Deterministic reference -> library rows. uuid (`paper_id`) and DOI are
+    exact; otherwise a conjunction of normalized fields: a fuzzy title match (the
+    shared sources._score_candidate scorer + threshold, so misspellings still
+    resolve), plus author-surname/year/journal corroboration. "Deterministic"
+    means rule-based and repeatable — a fixed scorer + fixed threshold, not
+    embeddings. Returns 0, 1, or many rows ranked by score; the caller decides
+    what to do with ambiguity (never auto-picks here)."""
     pool = await get_pool()
+
+    # 0. uuid is the exact internal id (returned by get_papers/find_papers/etc).
+    if paper_id:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"SELECT {_LIBRARY_COLS} FROM library WHERE id = $1::uuid", paper_id
+            )
+        return [dict(r) for r in rows]
 
     # 1. DOI is exact and authoritative.
     if doi:
@@ -2409,9 +2418,10 @@ async def resolve_reference(
             for r, s in sorted(scored, key=lambda t: t[1], reverse=True)
             if s >= threshold
         ]
-    if authors:
-        # Authors given are part of the deterministic conjunction: a row must
-        # share a surname (corroboration alone can't override a missing author).
+    if authors and not title:
+        # With no title, author surname is the gate. When a title IS given the
+        # surname is only a soft bonus inside _score_candidate, so a strong title
+        # match is never dropped just because author metadata differs or is missing.
         wanted_surnames = _surnames(authors)
         if wanted_surnames:
             cands = [

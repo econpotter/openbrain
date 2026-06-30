@@ -1,12 +1,32 @@
 """
 tools/library.py — ingest_document, ingest_directory, fetch_papers, find_papers,
-                   get_papers, update_library, update_library_status tools.
+                   get_papers, update_paper, update_paper_status tools.
 """
 
 import json
 from pathlib import Path
 
 from openbrain import brain
+
+
+async def _locate_library_record(id: str | None, match: str | None):
+    """Locate exactly one library record by uuid (`id`) or a `match` (doi/title,
+    resolved deterministically like get_papers). Returns the record dict, or an
+    error string the caller can return verbatim."""
+    if id:
+        matches = await brain.resolve_reference(paper_id=id)
+    elif match:
+        kind = brain.sources.detect_identifier_kind(match)
+        ref = {"doi": match} if kind in ("doi", "arxiv") else {"title": match}
+        matches = await brain.resolve_reference(**ref)
+    else:
+        return "Supply id (uuid) or match (a doi or title) to identify the record."
+    if not matches:
+        return "No library record matched."
+    if len(matches) > 1:
+        listed = ", ".join(f"{r['title']} [{r['id']}]" for r in matches)
+        return f"Ambiguous — {len(matches)} matches: {listed}. Pass id to disambiguate."
+    return matches[0]
 
 
 def register(mcp):
@@ -81,7 +101,7 @@ def register(mcp):
             msg += (
                 f"\n\nNo metadata found (no DOI detected). The record was saved with the "
                 f"filename as title. Ask the user for a BibTeX entry or a title, then call "
-                f'update_library(query="{result["title"]}", bibtex=...) to fix it.'
+                f'update_paper(match="{result["title"]}", bibtex=...) to fix it.'
             )
         return msg
 
@@ -352,6 +372,7 @@ def register(mcp):
 
     @mcp.tool
     async def get_papers(
+        id: str | None = None,
         doi: str | None = None,
         title: str | None = None,
         journal: str | None = None,
@@ -359,25 +380,30 @@ def register(mcp):
         year: int | None = None,
     ) -> str:
         """
-        Deterministically retrieve library record(s) by bibliographic reference —
-        not by free-text search. Supply any subset of doi/title/journal/authors/
-        year; DOI matches exactly, the rest match on normalized fields together.
+        Deterministically retrieve library record(s) by uuid or bibliographic
+        reference — not by free-text search. Supply `id` (the uuid returned by
+        get_papers/find_papers/store_papers) or any subset of doi/title/journal/
+        authors/year; uuid and DOI match exactly, the rest on normalized fields.
 
         Use this when you know *which* paper(s) you want (you have a citation).
         Use find_papers for "papers about X" (semantic), or search by topic.
 
         Args:
+            id: Library uuid (exact). Preferred when you have it.
             doi: DOI (exact, authoritative when present).
             title: Paper title (fuzzy match — tolerates case/punctuation/apostrophe and slight misspellings).
             journal: Journal/venue name or canonical abbrev.
             authors: One author or a comma-separated list (surname is enough).
             year: Publication year (exact).
         """
+        if not any((id, doi, title, journal, authors, year)):
+            return "Supply id (uuid) or a reference (doi/title/journal/authors/year)."
         author_list = (
             [a.strip() for a in authors.split(",") if a.strip()] if authors else None
         )
         rows = await brain.resolve_reference(
-            doi=doi, title=title, journal=journal, authors=author_list, year=year
+            paper_id=id, doi=doi, title=title, journal=journal,
+            authors=author_list, year=year,
         )
         if not rows:
             return "No library record matched the reference."
@@ -412,8 +438,9 @@ def register(mcp):
         return "\n".join(lines)
 
     @mcp.tool
-    async def update_library(
-        query: str,
+    async def update_paper(
+        id: str | None = None,
+        match: str | None = None,
         bibtex: str | None = None,
         title: str | None = None,
         authors: str | None = None,
@@ -425,7 +452,8 @@ def register(mcp):
         doi: str | None = None,
     ) -> str:
         """
-        Update fields on a library record. Looks up by title, author, filepath, or DOI.
+        Update fields on one library record. Identify it by `id` (uuid) or
+        `match` (a doi/title, resolved deterministically like get_papers).
 
         Use this to correct catalog metadata after ingestion. Do not re-ingest a
         document just to fix title, authors, DOI, source, type, or status.
@@ -437,8 +465,8 @@ def register(mcp):
         Perspectives" → "jour-econ-pers").
 
         Args:
-            query:     Search term to identify the record (title fragment, author name,
-                       filename slug like "Smith2020", or DOI).
+            id:        Library uuid (exact). Preferred when you have it.
+            match:     A doi or title to locate the record when you lack the uuid.
             bibtex:    BibTeX entry string — populates title, authors, year, source,
                        abstract, doi, and bibtex fields in one go.
             title:     New title (overrides bibtex).
@@ -450,14 +478,10 @@ def register(mcp):
             status:    New status — ingested | reading | read | archived.
             doi:       New DOI (overrides bibtex).
         """
-        matches = await brain.find_library_records(query)
-        if not matches:
-            return f"No library record found matching '{query}'."
-        if len(matches) > 1:
-            titles = ", ".join(r["title"] for r in matches)
-            return f"Multiple matches: {titles}. Please be more specific."
+        record = await _locate_library_record(id, match)
+        if isinstance(record, str):
+            return record  # error / ambiguity message
 
-        record = matches[0]
         updates: dict = {}
 
         if bibtex is not None:
@@ -503,41 +527,29 @@ def register(mcp):
         )
 
     @mcp.tool
-    async def update_library_status(query: str, status: str) -> str:
+    async def update_paper_status(
+        status: str,
+        id: str | None = None,
+        match: str | None = None,
+    ) -> str:
         """
-        Update the status of a library record.
+        Update the reading status of one library record, identified by `id`
+        (uuid) or `match` (a doi/title).
 
-        Use this when the user says a paper/document is now reading, read,
-        archived, or should return to ingested.
+        Use this when the user says a paper is now reading, read, archived, or
+        should return to ingested.
 
         Args:
-            query:  Title fragment, author name, filename slug, or DOI.
             status: ingested | reading | read | archived
+            id:     Library uuid (exact). Preferred when you have it.
+            match:  A doi or title to locate the record when you lack the uuid.
         """
-        matches = await brain.find_library_records(query)
-        if not matches:
-            return f"No library record found matching '{query}'."
-        if len(matches) > 1:
-            titles = ", ".join(r["title"] for r in matches)
-            return f"Multiple matches: {titles}. Please be more specific."
-
+        record = await _locate_library_record(id, match)
+        if isinstance(record, str):
+            return record
         updated = await brain.update_library_record(
-            str(matches[0]["id"]), {"status": status}
+            str(record["id"]), {"status": status}
         )
         if not updated:
             return "Update failed."
         return f"Updated: {updated['title']} → {updated['status']}"
-
-    @mcp.tool
-    async def update_status(query: str, status: str) -> str:
-        """
-        Compatibility alias for update_library_status.
-
-        Prefer update_library_status because the clearer name helps models
-        choose the right tool when multiple MCP servers are available.
-
-        Args:
-            query:  Title fragment, author name, filename slug, or DOI.
-            status: ingested | reading | read | archived
-        """
-        return await update_library_status(query, status)

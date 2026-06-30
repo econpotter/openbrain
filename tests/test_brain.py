@@ -1180,20 +1180,18 @@ class LibrarySearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("LIMIT $5", query)
         self.assertEqual(args, ([0.1, 0.2], 0.6, 2020, "paper", 4))
 
-    async def test_update_library_status_alias_uses_library_update(self):
+    async def test_update_paper_status_resolves_then_updates(self):
         mcp = _Mcp()
         library_tools.register(mcp)
         matches = [{"id": "library-1", "title": "Paper"}]
         updated = {"title": "Paper", "status": "read"}
         with (
-            patch.object(
-                brain, "find_library_records", AsyncMock(return_value=matches)
-            ),
+            patch.object(brain, "resolve_reference", AsyncMock(return_value=matches)),
             patch.object(
                 brain, "update_library_record", AsyncMock(return_value=updated)
             ),
         ):
-            result = await mcp.tools["update_library_status"]("Paper", "read")
+            result = await mcp.tools["update_paper_status"]("read", match="Paper")
 
         self.assertEqual(result, "Updated: Paper → read")
 
@@ -1620,7 +1618,9 @@ class ReferenceResolveTests(unittest.IsolatedAsyncioTestCase):
             out = await brain.resolve_reference(title="catllemens asociation")  # typos
         self.assertEqual([r["id"] for r in out], ["1"])
 
-    async def test_author_surname_corroboration_disambiguates(self):
+    async def test_author_surname_corroboration_ranks_first(self):
+        # With a title given, author is a soft bonus: both same-title rows are
+        # returned, but the matching-author row ranks first (not dropped).
         rows = [
             _lib_row(id="1", title="Shared Title", authors=["Jane Doe"], year=2001),
             _lib_row(id="2", title="Shared Title", authors=["John Smith"], year=2001),
@@ -1628,7 +1628,16 @@ class ReferenceResolveTests(unittest.IsolatedAsyncioTestCase):
         conn = _FetchConnection(rows)
         with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
             out = await brain.resolve_reference(title="shared title", authors=["Doe"])
-        self.assertEqual([r["id"] for r in out], ["1"])
+        self.assertEqual(out[0]["id"], "1")  # Doe ranked first by corroboration
+        self.assertEqual({r["id"] for r in out}, {"1", "2"})
+
+    async def test_resolves_by_uuid(self):
+        rows = [_lib_row(id="u-1", title="Whatever")]
+        conn = _FetchConnection(rows)
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
+            out = await brain.resolve_reference(paper_id="u-1")
+        self.assertEqual([r["id"] for r in out], ["u-1"])
+        self.assertIn("WHERE id = $1::uuid", conn.calls[0][0])
 
     async def test_returns_multiple_when_ambiguous(self):
         rows = [

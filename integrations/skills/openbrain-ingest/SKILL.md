@@ -32,8 +32,8 @@ cleans up the staged copy automatically.
 
 If ingest reports missing metadata, the record exists but is incomplete.
 Re-ingesting will not help. Ask the user for a BibTeX entry or title, then patch
-in place with `update_library(query=<title>, bibtex=...)` or
-`update_library(query=<title>, title=...)`.
+in place with `update_paper(match=<title>, bibtex=...)` or
+`update_paper(match=<title>, title=...)`.
 
 ## Output
 

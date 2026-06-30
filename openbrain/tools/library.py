@@ -151,8 +151,9 @@ def register(mcp):
 
         Use ingest_document instead when you have the actual PDF/text file.
 
-        Returns a human-readable plain-text summary (not JSON) — do not json.loads
-        the result.
+        Returns a JSON object. Mode `lookup` → {mode, found, title, doi,
+        abstract_stored, embedded, deduped, …}; `batch` → {mode, summary,
+        results:[…]}; `topic` → {mode, candidates:[…], stored, stored_ids}.
 
         Args:
             identifier:  DOI, arXiv ID, or title/author text for known-item lookup.
@@ -169,7 +170,12 @@ def register(mcp):
             force:       Re-fetch and replace an existing record with the same DOI.
         """
         if not identifier and not identifiers and not topic:
-            return "Supply identifier (DOI/arXiv/title), identifiers (list), or topic."
+            return json.dumps(
+                {
+                    "error": "Supply identifier (DOI/arXiv/title), "
+                    "identifiers (list), or topic."
+                }
+            )
         source_order = [s.strip() for s in sources.split(",")] if sources else None
         author_list = (
             [a.strip() for a in author.split(",") if a.strip()] if author else None
@@ -188,91 +194,9 @@ def register(mcp):
             authors=author_list,
         )
 
-        if result["mode"] == "batch":
-            s = result["summary"]
-            lines = [
-                f"Batch fetch: {s['fetched']} fetched, {s['deduped']} already in "
-                f"library, {s['not_found']} not found "
-                f"(of {s['requested']} requested)."
-            ]
-            if s["abstracts_deferred"]:
-                lines.append(
-                    f"{s['abstracts_deferred']} abstract(s) stored without an "
-                    "embedding (model unavailable) — run backfill_embeddings later."
-                )
-            for r in result["results"]:
-                ident = r["identifier"]
-                if not r.get("found"):
-                    lines.append(f"- not found: {ident}")
-                elif r.get("deduped"):
-                    lines.append(f"- already in library: {r.get('title') or ident}")
-                else:
-                    title = r.get("title") or ident
-                    if not r["abstract_stored"]:
-                        note = "no abstract"
-                    elif r.get("embedded"):
-                        note = "embedded"
-                    else:
-                        note = "embedding deferred"
-                    lines.append(f"- fetched: {title} ({note})")
-            return "\n".join(lines)
-
-        if result["mode"] == "topic":
-            candidates = result["candidates"]
-            if not candidates:
-                return f"No candidates found for topic '{topic}'."
-            if result.get("stored"):
-                header = (
-                    f"Candidates for '{topic}' — stored {result['stored']} "
-                    f"of {len(candidates)}:"
-                )
-            else:
-                header = (
-                    f"Candidates for '{topic}' (nothing stored — re-call with "
-                    "store=true or a DOI/title):"
-                )
-            lines = [header]
-            for c in candidates:
-                authors = c.get("authors") or []
-                author_str = " & ".join(authors[:2]) + (
-                    " et al." if len(authors) > 2 else ""
-                )
-                header = f"- {c.get('title') or 'Untitled'}"
-                if author_str:
-                    header += f" — {author_str}"
-                if c.get("year"):
-                    header += f" ({c['year']})"
-                if c.get("doi"):
-                    header += f" doi:{c['doi']}"
-                elif c.get("arxiv_id"):
-                    header += f" arXiv:{c['arxiv_id']}"
-                lines.append(header)
-            return "\n".join(lines)
-
-        if not result["found"]:
-            return f"No paper found for '{identifier}'."
-        if result.get("deduped"):
-            return (
-                f"Already in library: {result['title']} (doi:{result['doi']}). "
-                "Use force=True to re-fetch."
-            )
-        authors = result.get("authors") or []
-        author_str = " & ".join(authors[:3]) + (" et al." if len(authors) > 3 else "")
-        msg = f"Fetched: {result['title']}"
-        if author_str:
-            msg += f" — {author_str}"
-        if result.get("year"):
-            msg += f" ({result['year']})"
-        if not result["abstract_stored"]:
-            msg += "\nAbstract: none found"
-        elif result.get("embedded"):
-            msg += "\nAbstract: stored and embedded"
-        else:
-            msg += (
-                "\nAbstract: stored, embedding deferred (model unavailable) — "
-                "run backfill_embeddings later"
-            )
-        return msg
+        # The brain.fetch_papers result is already structured per mode
+        # (batch/topic/lookup) — return it verbatim as JSON.
+        return json.dumps(result, indent=2, default=str)
 
     @mcp.tool
     async def ingest_directory(

@@ -1,6 +1,6 @@
 """
 tools/acquire.py — MCP tools for deterministic library browsing and export:
-structured query + affordances (query_library, coverage, list_venues,
+structured query + affordances (list_papers, coverage, list_venues,
 list_concepts, remove_paper) and bibtex export. All return JSON-friendly text
 so an external agent drives the loop without parsing prose.
 
@@ -17,7 +17,7 @@ from openbrain import brain, sources
 
 def register(mcp):
     @mcp.tool
-    async def query_library(
+    async def list_papers(
         venue: str | None = None,
         kind: str | None = None,
         year_min: int | None = None,

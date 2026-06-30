@@ -1971,6 +1971,34 @@ class DeletePaperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(conn.executed, [])  # nothing deleted
 
 
+class GetCitationsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_wid_used_directly(self):
+        with patch.object(
+            brain.sources, "openalex_citation_neighbors",
+            lambda w: [{"title": "Neighbor", "doi": "10.1/n", "url": "https://openalex.org/W2"}],
+        ), patch.object(brain.sources, "openalex_lookup", lambda i, k: (_ for _ in ()).throw(AssertionError("should not lookup for a W-id"))):
+            out = await brain.get_citations("W1")
+        self.assertEqual(out[0]["doi"], "10.1/n")
+
+    async def test_uuid_resolves_via_stored_doi(self):
+        conn = _DeleteConnection(row={"doi": "10.1/x"})
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))),
+            patch.object(brain.sources, "openalex_lookup",
+                         lambda i, k: {"url": "https://openalex.org/W9"}),
+            patch.object(brain.sources, "openalex_citation_neighbors",
+                         lambda w: [{"title": "N", "doi": "10.1/n"}]),
+        ):
+            out = await brain.get_citations("11111111-1111-1111-1111-111111111111")
+        self.assertEqual(out[0]["title"], "N")
+
+    async def test_uuid_without_doi_returns_empty(self):
+        conn = _DeleteConnection(row=None)
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
+            out = await brain.get_citations("11111111-1111-1111-1111-111111111111")
+        self.assertEqual(out, [])
+
+
 class RerankTests(unittest.IsolatedAsyncioTestCase):
     _CFG = {"enabled": True, "provider": "litellm", "model": "bge-reranker"}
 

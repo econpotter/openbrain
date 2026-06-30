@@ -13,25 +13,24 @@ client contract exactly: get_citations -> {citations}, score_relevance ->
 search lives in tools/library.py as `find_papers` -> {ids}.
 """
 
-import asyncio
 import json
 
-from openbrain import brain, sources
+from openbrain import brain
 
 
 def register(mcp):
     @mcp.tool
     async def get_citations(paper_id: str) -> str:
-        """Citation neighbors of an OpenAlex work, for the driver's citation walk.
+        """Citation neighbors of a paper, for the driver's citation walk.
 
-        `paper_id` is an OpenAlex work id (W… or full URL). Returns the work's
-        referenced works (outbound) and the first page of its citing works
-        (inbound), deduplicated as paper metadata records. No walk or gating
-        happens here — the driver decides which neighbors to pursue."""
-        loop = asyncio.get_event_loop()
-        neighbors = await loop.run_in_executor(
-            None, lambda: sources.openalex_citation_neighbors(paper_id)
-        )
+        `paper_id` may be a library uuid (the driver's normal handle), a DOI, or
+        an OpenAlex work id — uuid/DOI are resolved to the OpenAlex work
+        internally. Returns the work's referenced works (outbound) and the first
+        page of its citing works (inbound), deduplicated as paper metadata
+        records (title/doi/authors/year/url; no library ids — store keepers via
+        store_papers to mint ids). No walk or gating here — the driver decides
+        which neighbors to pursue."""
+        neighbors = await brain.get_citations(paper_id)
         return json.dumps({"citations": neighbors}, indent=2, default=str)
 
     @mcp.tool

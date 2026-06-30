@@ -1966,6 +1966,49 @@ async def relevance(anchor_ids: list[str], candidate_texts: list[str]) -> list[f
     return scores
 
 
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
+)
+
+
+async def get_citations(ref: str) -> list[dict]:
+    """Citation neighbors of a paper, identified by a library uuid, a DOI, or an
+    OpenAlex work id. The driver holds library uuids, so resolve uuid -> stored
+    DOI -> OpenAlex work; a bare DOI resolves the same way; a W-id is used as-is.
+    Returns neighbor metadata dicts (no library ids — the driver stores keepers
+    via store_papers to mint ids). Empty list when the paper can't be resolved."""
+    loop = asyncio.get_event_loop()
+    r = (ref or "").strip()
+    if not r:
+        return []
+
+    if r.startswith("W") or "openalex.org/W" in r:
+        wid: str | None = r
+    else:
+        doi: str | None = None
+        if _UUID_RE.match(r):
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT doi FROM library WHERE id = $1::uuid", r
+                )
+            doi = row["doi"] if row else None
+        else:
+            doi = sources._normalize_doi(r) or r
+        if not doi:
+            return []
+        rec = await loop.run_in_executor(
+            None, lambda: sources.openalex_lookup(doi, "doi")
+        )
+        wid = rec.get("url") if rec else None
+
+    if not wid:
+        return []
+    return await loop.run_in_executor(
+        None, lambda: sources.openalex_citation_neighbors(wid)
+    )
+
+
 async def _fetch_one(
     identifier: str,
     *,

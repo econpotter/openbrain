@@ -1849,6 +1849,11 @@ async def store_papers(papers: list[dict], *, force: bool = False) -> dict:
             {
                 "id": outcome["id"],
                 "title": outcome["title"],
+                "authors": meta.get("authors") or [],
+                "year": meta.get("year"),
+                "doi": meta.get("doi"),
+                "venue": meta.get("venue_abbrev") or meta.get("source"),
+                "bibtex": meta.get("bibtex"),
                 "deduped": outcome.get("deduped", False),
             }
         )

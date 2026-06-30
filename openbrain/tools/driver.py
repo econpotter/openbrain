@@ -53,7 +53,8 @@ def register(mcp):
         Per paper: crossref enrich (when a DOI is present), venue canon, then
         store with the abstract embedded. The driver calls this to land papers it
         found via the citation walk after its own relevance gate. Returns
-        {stored, deduped, results:[{id, title, deduped}]}; a paper is `deduped`
-        when it already existed and no new row was created."""
+        {stored, deduped, results:[{id, title, authors, year, doi, venue,
+        bibtex, deduped}]} — the full citation per paper, not just the id; a
+        paper is `deduped` when it already existed and no new row was created."""
         result = await brain.store_papers(papers)
         return json.dumps(result, indent=2, default=str)

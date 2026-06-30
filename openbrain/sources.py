@@ -20,6 +20,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -536,6 +537,18 @@ _REGISTRY: dict[str, tuple[Callable, Callable]] = {
 _DEFAULT_ORDER = ["openalex", "crossref", "semantic_scholar", "arxiv"]
 
 
+def _normalize_title(title: str | None) -> str:
+    """Lowercase, strip accents/punctuation, normalize '&', collapse whitespace —
+    so two spellings of the same title compare equal in the exact-match gate."""
+    if not title:
+        return ""
+    text = unicodedata.normalize("NFKD", title)
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    text = text.lower().replace("&", " and ")
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _dedup_key(rec: PaperMeta) -> str:
     if rec.get("doi"):
         return "doi:" + rec["doi"].lower()
@@ -590,6 +603,13 @@ def resolve(
             rec = lookup_fn(identifier, kind)
             if rec and rec.get("title"):
                 found.append(rec)
+        # Title lookups are fuzzy at the source: each backend returns its nearest
+        # search hit. Require an exact (normalized) title match so a generic or
+        # partial query can't store an unrelated paper. DOI/arXiv are exact
+        # identifiers and skip the gate.
+        if kind == "title":
+            wanted = _normalize_title(identifier)
+            found = [r for r in found if _normalize_title(r.get("title")) == wanted]
         return _merge(found) if found else None
 
     return None

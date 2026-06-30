@@ -127,6 +127,11 @@ def register(mcp):
         """
         Fetch paper metadata and abstract from external sources, without a local file.
 
+        Prefer a DOI or arXiv ID whenever you have one — those are exact lookups.
+        Title lookups require an exact (normalized) title match against the source
+        and return "not found" otherwise, so a partial or generic title will not
+        resolve. Only fall back to a title when no DOI/arXiv ID is available.
+
         Three modes:
           - Lookup: supply identifier (DOI, arXiv ID, or title/author text). Resolves
             one paper across sources, stores it as a library record, and embeds the
@@ -141,7 +146,9 @@ def register(mcp):
 
         Args:
             identifier:  DOI, arXiv ID, or title/author text for known-item lookup.
+                         DOI/arXiv preferred; title must match exactly to resolve.
             identifiers: List of DOIs/arXiv IDs/titles for batch known-item lookup.
+                         Use DOIs/arXiv IDs where you have them.
             topic:       Topic/keyword query for discovery (returns candidates only).
             doc_type:    Type label — paper | report | preprint | other.
             sources:     Comma-separated source override (e.g. "openalex,arxiv"),

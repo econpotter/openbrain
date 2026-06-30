@@ -83,7 +83,7 @@ class ResolveTests(unittest.TestCase):
         }
         with patch.object(sources, "_REGISTRY", registry):
             merged = sources.resolve(
-                identifier="10.1/x", order=["openalex", "crossref"]
+                identifier="10.1/x", id_kind="doi", order=["openalex", "crossref"]
             )
         self.assertEqual(merged["abstract"], "The abstract.")
         self.assertEqual(merged["source"], "Journal X")
@@ -106,6 +106,86 @@ class ResolveTests(unittest.TestCase):
         registry = {"openalex": (lambda i, k: None, lambda q, n: [])}
         with patch.object(sources, "_REGISTRY", registry):
             self.assertIsNone(sources.resolve(identifier="10.1/x", order=["openalex"]))
+
+
+class TitleExactMatchTests(unittest.TestCase):
+    """Known-item title lookups must only return a paper whose title matches the
+    query exactly (after normalization). A nearest-but-wrong hit is dropped, so
+    generic/partial titles can no longer corrupt the library."""
+
+    def test_title_lookup_rejects_nonmatching_paper(self):
+        wrong = sources.PaperMeta(
+            title="QuickStats: Suicide Rates for Teens Aged 15-19 Years",
+            doi="10.9/cdc",
+            source_name="openalex",
+        )
+        registry = {"openalex": (lambda i, k: wrong, lambda q, n: [wrong])}
+        with patch.object(sources, "_REGISTRY", registry):
+            self.assertIsNone(
+                sources.resolve(identifier="QuickStats", order=["openalex"])
+            )
+
+    def test_title_lookup_returns_exact_match(self):
+        rec = sources.PaperMeta(
+            title="Optimal Bandwidth Choice",
+            doi="10.1/x",
+            source_name="openalex",
+        )
+        registry = {"openalex": (lambda i, k: rec, lambda q, n: [rec])}
+        with patch.object(sources, "_REGISTRY", registry):
+            merged = sources.resolve(
+                identifier="Optimal Bandwidth Choice", order=["openalex"]
+            )
+        self.assertIsNotNone(merged)
+        self.assertEqual(merged["title"], "Optimal Bandwidth Choice")
+
+    def test_title_match_ignores_case_punctuation_whitespace(self):
+        rec = sources.PaperMeta(
+            title="Optimal Bandwidth Choice",
+            doi="10.1/x",
+            source_name="openalex",
+        )
+        registry = {"openalex": (lambda i, k: rec, lambda q, n: [rec])}
+        with patch.object(sources, "_REGISTRY", registry):
+            merged = sources.resolve(
+                identifier="  optimal,  bandwidth   choice. ", order=["openalex"]
+            )
+        self.assertIsNotNone(merged)
+
+    def test_title_lookup_keeps_only_exact_survivor_across_sources(self):
+        wrong = sources.PaperMeta(
+            title="Some Unrelated Paper", doi="10.2/y", source_name="openalex"
+        )
+        right = sources.PaperMeta(
+            title="Land Speculation and Development",
+            doi="10.1/x",
+            source_name="crossref",
+        )
+        registry = {
+            "openalex": (lambda i, k: wrong, lambda q, n: [wrong]),
+            "crossref": (lambda i, k: right, lambda q, n: [right]),
+        }
+        with patch.object(sources, "_REGISTRY", registry):
+            merged = sources.resolve(
+                identifier="Land Speculation and Development",
+                order=["openalex", "crossref"],
+            )
+        self.assertIsNotNone(merged)
+        self.assertEqual(merged["doi"], "10.1/x")
+        self.assertEqual(merged["source_name"], "crossref")
+
+    def test_doi_lookup_not_subject_to_title_gate(self):
+        # DOI is an exact identifier; a differing title must still be returned.
+        rec = sources.PaperMeta(
+            title="A Paper With Any Title", doi="10.1/x", source_name="openalex"
+        )
+        registry = {"openalex": (lambda i, k: rec, lambda q, n: [])}
+        with patch.object(sources, "_REGISTRY", registry):
+            merged = sources.resolve(
+                identifier="10.1/x", id_kind="doi", order=["openalex"]
+            )
+        self.assertIsNotNone(merged)
+        self.assertEqual(merged["title"], "A Paper With Any Title")
 
 
 if __name__ == "__main__":

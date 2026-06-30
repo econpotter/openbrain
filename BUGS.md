@@ -62,3 +62,100 @@ None confirmed yet. Test paper `2602.16864` ("Position: A Dynamical Systems
 Perspective is Needed to Advance Time Series Modeling") has a metadata/abstract
 record via `fetch_paper`, but no full text. PDF is staged at host
 `/mnt/data/openbrain/library/2602.16864.pdf` awaiting a working ingest path.
+
+## `fetch_paper` title-only lookups silently return the wrong paper
+
+**Status:** Fixed — title lookups now require an exact (normalized) title match.
+**Reported:** 2026-06-29
+**Severity:** Medium — corrupts the library with confidently-wrong records; no error surfaced.
+
+### Fix
+
+`sources.resolve()` known-item branch now gates `kind == "title"` results: a
+candidate is kept only when its normalized title (`sources._normalize_title`:
+case/accents/punctuation/`&`/whitespace folded) equals the normalized query.
+Non-matches are dropped before merge, so a generic/partial title returns
+`not found` instead of storing an unrelated paper. DOI/arXiv lookups are exact
+identifiers and skip the gate; topic mode stays fuzzy. `fetch_paper`'s docstring
+now tells callers to prefer DOI/arXiv and treats title as exact-match last-resort.
+
+### Symptom
+
+Bulk-importing a 174-entry BibTeX file: entries with no DOI were looked up by
+title. The fuzzy title search returns the nearest source (OpenAlex) hit with no
+similarity floor, so generic/short titles matched unrelated papers and were
+stored as `fetched` with full confidence:
+
+- `"QuickStats"` → *QuickStats: Suicide Rates for Teens Aged 15–19 Years … United States, 1975–2015* (CDC)
+- `"2017 Census of Agriculture"` → *Value-Added Agriculture … Agritourism in Tennessee*
+- `"Land speculation"` → *Chinese eco-cities: … land-speculation-oriented local entrepreneurialism*
+- `"Use It Or Lose It: Adverse Possession and Economic Development"` → *The Lancet Commission on global mental health and sustainable development*
+
+### Notes / possible fixes
+
+- Apply a title-similarity threshold to known-item title lookups; below it, return
+  `not found` (or a `low_confidence` candidate list) instead of storing.
+- For batch imports, prefer a structured-field match (title + first author + year)
+  over a bare title query.
+- Consider returning per-identifier match confidence in the batch summary so a
+  caller can flag/skip weak matches.
+
+## `fetch_paper` dedups on DOI only → duplicate records for the same paper
+
+**Status:** Open
+**Reported:** 2026-06-29
+**Severity:** Low.
+
+### Symptom
+
+The same paper fetched once by DOI and once by title creates two library rows —
+dedup keys on DOI only, so the title-sourced copy (which may carry a different or
+no DOI) is not recognized as a duplicate. Saw two rows for *Environmental Water
+Rights Transfers: A Review of State Laws* after a batch import that contained both
+a DOI entry and a title entry for it.
+
+### Notes / possible fixes
+
+- Add a secondary dedup key (normalized title + first author + year) when DOI is
+  absent or differs.
+
+## `fetch_paper` returns a prose summary, not JSON (client integration note)
+
+**Status:** Documented (client-side worked around)
+**Reported:** 2026-06-29
+**Severity:** Low — affects MCP clients that assume JSON tool results.
+
+### Symptom
+
+`fetch_paper` returns a human-readable batch summary string
+(`"Batch fetch: N fetched, M already in library, …"`), unlike most openbrain tools
+which return JSON (often a `json.dumps` string). A client that blindly
+`json.loads()` every text result crashes with
+`Expecting value: line 1 column 1 (char 0)`. The server-side fetch still
+completes; only the client's response parsing fails.
+
+### Notes / possible fixes
+
+- Either return structured JSON (e.g. `{fetched: [...], already: [...], not_found: [...]}`)
+  alongside/instead of the prose, or document that this tool's result is plain text.
+
+## Embedding model unavailable at fetch time leaves chunks unembedded; backfill can't recover
+
+**Status:** Open
+**Reported:** 2026-06-29
+**Severity:** Medium — affected papers are invisible to semantic `search_library` until re-embedded.
+
+### Symptom
+
+During the batch import several abstracts were stored with
+`"abstract stored without an embedding (model unavailable)"` /
+`"embedding deferred"`. A later `backfill_embeddings` run reported
+`0 embedded, 3 failed, 3 still pending` — the embed model was still down, so the
+backfill could not complete and the chunks remain unsearchable.
+
+### Notes / possible fixes
+
+- Confirm the local embedding model's availability/health on the deployed
+  container; `backfill_embeddings` only succeeds when it is up.
+- Consider surfacing *which* records are pending (ids/titles) so they can be
+  targeted once the model is back.

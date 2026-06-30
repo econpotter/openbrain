@@ -14,7 +14,7 @@ Answer "what do I know about X?" from openbrain.
 
 Call openbrain MCP tool `search_brain(query=<query>)`. If the query is clearly
 about a stored document/paper rather than a memory, also call
-`search_library(query=<query>)`. Synthesize both into one answer; do not dump
+`find_papers(text=<query>)`. Synthesize both into one answer; do not dump
 raw rows.
 
 ## Routing extras

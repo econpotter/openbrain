@@ -1122,6 +1122,57 @@ class LibrarySearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Path: /tmp/paper.pdf", result)
 
 
+class _AnchorSearchConnection:
+    """First fetch returns anchor embeddings; second returns candidate chunk rows."""
+
+    def __init__(self, anchor_embeddings, candidate_rows):
+        self.anchor_embeddings = anchor_embeddings
+        self.candidate_rows = candidate_rows
+        self.calls = []
+
+    async def fetch(self, query, *args):
+        self.calls.append((query, args))
+        if "SELECT c.embedding FROM chunks c" in query:
+            return [{"embedding": e} for e in self.anchor_embeddings]
+        return self.candidate_rows
+
+
+class AnchorSearchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_centroid_search_excludes_anchors_and_returns_rows(self):
+        cand = [
+            {
+                "chunk_id": "c1",
+                "library_id": "lib-2",
+                "title": "Neighbor",
+                "authors": ["A"],
+                "year": 2020,
+                "source": "J",
+                "doc_type": "paper",
+                "status": "ingested",
+                "chunk_text": "text",
+                "section": None,
+                "similarity": 0.9,
+            }
+        ]
+        conn = _AnchorSearchConnection([[1.0, 0.0], [0.0, 1.0]], cand)
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
+            rows = await brain.search_library_by_anchors(["lib-1"], count=5)
+        self.assertEqual([r["library_id"] for r in rows], ["lib-2"])
+        # The candidate query must carry an exclude-ids clause for the anchors.
+        candidate_query = conn.calls[1][0]
+        self.assertIn("!= ALL", candidate_query)
+
+    async def test_raises_when_no_anchor_embeddings(self):
+        conn = _AnchorSearchConnection([], [])
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
+            with self.assertRaises(ValueError):
+                await brain.search_library_by_anchors(["lib-1"])
+
+    async def test_raises_when_no_anchor_ids(self):
+        with self.assertRaises(ValueError):
+            await brain.search_library_by_anchors([])
+
+
 class ThoughtConnectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_get_thought_connections_excludes_restricted_by_default(self):
         connection = _FetchConnection([{"id": "thought-2"}])

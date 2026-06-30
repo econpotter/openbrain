@@ -56,7 +56,7 @@ def register(mcp):
         """Deterministic structured query over the library: exact filters on
         venue (canonical abbrev), kind (journal/preprint/…), year range, reading
         status, and concept. This is "search by journal/year/status" done right —
-        distinct from the semantic search_library tool."""
+        distinct from the semantic find_papers tool."""
         rows = await brain.query_library_struct(
             venue=venue,
             kind=kind,

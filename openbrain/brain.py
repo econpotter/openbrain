@@ -28,6 +28,7 @@ import yaml
 from dotenv import load_dotenv
 
 from openbrain import sources
+from openbrain import venues
 from openbrain import venues as venues_mod
 
 load_dotenv()
@@ -304,9 +305,7 @@ async def _rerank_with_config(
     provider = config["provider"]
     model = config["model"]
     if provider != "litellm":
-        raise ValueError(
-            f"Unknown rerank.provider: {provider!r}. Expected: litellm"
-        )
+        raise ValueError(f"Unknown rerank.provider: {provider!r}. Expected: litellm")
     litellm_url = _litellm_url(config)
     if not litellm_url:
         raise ValueError(
@@ -658,7 +657,9 @@ async def search_thoughts_vec(
             threshold,
             _candidate_count(count),
         )
-    return await _reranked(query, [dict(r) for r in rows], lambda r: r["content"], count)
+    return await _reranked(
+        query, [dict(r) for r in rows], lambda r: r["content"], count
+    )
 
 
 async def get_thought_connections(
@@ -1804,16 +1805,54 @@ async def store_acquired_paper(meta: dict, *, force: bool = False) -> dict:
     }
 
 
-async def store_one(meta: dict) -> dict:
-    """Store a single paper's metadata, a thin wrapper over store_acquired_paper
-    for the external driver. Returns the {id, title, deduped} the driver needs to
-    track per-front membership; the embedded flag stays internal."""
-    stored = await store_acquired_paper(meta)
-    return {
-        "id": stored["id"],
-        "title": stored["title"],
-        "deduped": stored["deduped"],
-    }
+async def store_papers(papers: list[dict], *, force: bool = False) -> dict:
+    """Store a caller-chosen list of paper metadata dicts. Per paper: crossref
+    enrich (fill a missing abstract/issn/bibtex/concepts when a DOI is present),
+    venue canon (venue_abbrev), then store_acquired_paper (DOI dedup, abstract
+    embedded, findings inline; no thought emitted). Returns a roll-up plus
+    per-paper rows. Callable directly (store without fetch)."""
+    if not papers:
+        return {"stored": 0, "deduped": 0, "results": []}
+    pool = await get_pool()
+    loop = asyncio.get_event_loop()
+    results: list[dict] = []
+    stored = deduped = 0
+    for raw in papers:
+        meta = dict(raw)
+        if meta.get("doi") and not meta.get("abstract"):
+            doi_value = meta["doi"]
+            extra = await loop.run_in_executor(
+                None, lambda: sources.crossref_lookup(doi_value, "doi")
+            )
+            if extra:
+                for key in ("abstract", "issn_l", "bibtex"):
+                    if not meta.get(key) and extra.get(key):
+                        meta[key] = extra[key]
+                if extra.get("concepts"):
+                    meta["concepts"] = list(
+                        dict.fromkeys((meta.get("concepts") or []) + extra["concepts"])
+                    )
+        if not meta.get("venue_abbrev"):
+            meta["venue_abbrev"] = await venues.match(
+                pool,
+                issn_l=meta.get("issn_l"),
+                source_id=meta.get("venue_source_id"),
+                name=meta.get("source"),
+            )
+            meta["issn"] = meta.get("issn_l")
+        outcome = await store_acquired_paper(meta, force=force)
+        if outcome.get("deduped"):
+            deduped += 1
+        else:
+            stored += 1
+        results.append(
+            {
+                "id": outcome["id"],
+                "title": outcome["title"],
+                "deduped": outcome.get("deduped", False),
+            }
+        )
+    return {"stored": stored, "deduped": deduped, "results": results}
 
 
 def _mean_vector(vectors: list[list[float]]) -> list[float]:
@@ -1833,9 +1872,7 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
-async def relevance(
-    anchor_ids: list[str], candidate_texts: list[str]
-) -> list[float]:
+async def relevance(anchor_ids: list[str], candidate_texts: list[str]) -> list[float]:
     """Score each candidate text by cosine similarity to the anchor centroid.
 
     The centroid is the component-wise mean of the stored embeddings for the
@@ -1867,91 +1904,132 @@ async def relevance(
     return scores
 
 
-async def fetch_paper(
-    identifier: str | None = None,
-    topic: str | None = None,
+async def _fetch_one(
+    identifier: str,
+    *,
     doc_type: str = "paper",
-    source_order: list[str] | None = None,
-    limit: int = 10,
+    order: list[str] | None = None,
     force: bool = False,
+    title_threshold: float | None = None,
+    year: int | None = None,
+    authors=None,
 ) -> dict:
-    """
-    Fetch paper metadata + abstract from external sources.
-
-    Topic mode (topic set): return ranked candidates without storing anything.
-    Lookup mode (identifier set): resolve one paper by DOI/arXiv/title and store
-    it as a metadata-only library record with the abstract embedded.
-    """
+    """Resolve one known-item paper (short-circuit + enrich across sources) and
+    store it as a metadata-only library record with the abstract embedded. A
+    title query tolerates misspellings via the shared fuzzy scorer; DOI/arXiv
+    stay exact. Returns {"found": bool, ...stored fields}."""
     loop = asyncio.get_event_loop()
-    order = source_order or _paper_sources_order()
-
-    if topic is not None:
-        candidates = await loop.run_in_executor(
-            None, lambda: sources.resolve(topic=topic, order=order, limit=limit)
-        )
-        return {"mode": "topic", "candidates": candidates or []}
-
-    if not identifier:
-        raise ValueError("fetch_paper requires either identifier or topic.")
-
     meta = await loop.run_in_executor(
-        None, lambda: sources.resolve(identifier=identifier, order=order)
+        None,
+        lambda: sources.resolve(
+            identifier=identifier,
+            order=order,
+            min_score=title_threshold,
+            year=year,
+            authors=authors,
+        ),
     )
     if not meta:
         return {"mode": "lookup", "found": False, "identifier": identifier}
-
     stored = await _store_paper(meta, doc_type, force)
     return {"mode": "lookup", "found": True, **stored}
 
 
 async def fetch_papers(
-    identifiers: list[str],
+    identifier: str | None = None,
+    identifiers: list[str] | None = None,
+    topic: str | None = None,
     doc_type: str = "paper",
     source_order: list[str] | None = None,
+    limit: int = 10,
     force: bool = False,
+    store: bool = False,
+    title_threshold: float | None = None,
+    year: int | None = None,
+    authors=None,
 ) -> dict:
-    """
-    Batch known-item lookup: resolve and store one library record per identifier
-    (DOI/arXiv/title). Each identifier is processed independently, so one bad or
-    unfound identifier does not abort the rest. Returns per-identifier results
-    plus a roll-up summary.
-    """
-    results: list[dict] = []
-    fetched = deduped = not_found = abstracts_deferred = 0
+    """Fetch from external sources, the one entry point for all input shapes.
 
-    for ident in identifiers:
-        ident = ident.strip()
-        if not ident:
-            continue
-        outcome = await fetch_paper(
-            identifier=ident,
-            doc_type=doc_type,
-            source_order=source_order,
-            force=force,
+    - Topic: fan out ALL sources (dedup) and return candidates; store only when
+      ``store=True`` (bulk store via store_papers).
+    - Known-item (identifier): short-circuit across sources + enrich one paper,
+      then store it (title tolerates misspellings; force replaces a DOI match).
+    - Batch (identifiers): one known-item lookup per identifier, each independent
+      so one bad/unfound identifier does not abort the rest.
+    """
+    loop = asyncio.get_event_loop()
+    order = source_order or _paper_sources_order()
+
+    if topic is not None:
+        resolved = await loop.run_in_executor(
+            None, lambda: sources.resolve(topic=topic, order=order, limit=limit)
         )
-        outcome["identifier"] = ident
-        results.append(outcome)
+        candidates: list[dict] = (
+            [dict(c) for c in resolved] if isinstance(resolved, list) else []
+        )
+        stored = 0
+        stored_ids: list[str] = []
+        if store and candidates:
+            report = await store_papers(candidates, force=force)
+            stored = report["stored"]
+            stored_ids = [r["id"] for r in report["results"] if not r.get("deduped")]
+        return {
+            "mode": "topic",
+            "candidates": candidates,
+            "stored": stored,
+            "stored_ids": stored_ids,
+        }
 
-        if not outcome.get("found"):
-            not_found += 1
-        elif outcome.get("deduped"):
-            deduped += 1
-        else:
-            fetched += 1
-            if outcome.get("abstract_stored") and not outcome.get("embedded"):
-                abstracts_deferred += 1
+    if identifiers:
+        results: list[dict] = []
+        fetched = deduped = not_found = abstracts_deferred = 0
+        for ident in identifiers:
+            ident = ident.strip()
+            if not ident:
+                continue
+            outcome = await _fetch_one(
+                identifier=ident,
+                doc_type=doc_type,
+                order=order,
+                force=force,
+                title_threshold=title_threshold,
+                year=year,
+                authors=authors,
+            )
+            outcome["identifier"] = ident
+            results.append(outcome)
+            if not outcome.get("found"):
+                not_found += 1
+            elif outcome.get("deduped"):
+                deduped += 1
+            else:
+                fetched += 1
+                if outcome.get("abstract_stored") and not outcome.get("embedded"):
+                    abstracts_deferred += 1
+        return {
+            "mode": "batch",
+            "results": results,
+            "summary": {
+                "requested": len(results),
+                "fetched": fetched,
+                "deduped": deduped,
+                "not_found": not_found,
+                "abstracts_deferred": abstracts_deferred,
+            },
+        }
 
-    return {
-        "mode": "batch",
-        "results": results,
-        "summary": {
-            "requested": len(results),
-            "fetched": fetched,
-            "deduped": deduped,
-            "not_found": not_found,
-            "abstracts_deferred": abstracts_deferred,
-        },
-    }
+    if not identifier:
+        raise ValueError("fetch_papers requires identifier, identifiers, or topic.")
+
+    return await _fetch_one(
+        identifier=identifier,
+        doc_type=doc_type,
+        order=order,
+        force=force,
+        title_threshold=title_threshold,
+        year=year,
+        authors=authors,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2125,7 +2203,9 @@ def _finding_source(row) -> dict:
     """Citation block for a finding's source paper (never a bare finding)."""
     authors = list(row["authors"] or [])
     return {
-        "citekey": citekey(authors, row["year"], row["venue_abbrev"], row.get("source")),
+        "citekey": citekey(
+            authors, row["year"], row["venue_abbrev"], row.get("source")
+        ),
         "authors": authors,
         "year": row["year"],
         "title": row["title"],
@@ -2226,7 +2306,9 @@ async def search_findings(
             entry["findings"].append(_finding_block(row))
         return list(grouped.values())
 
-    return [{"finding": _finding_block(row), "source": _finding_source(row)} for row in rows]
+    return [
+        {"finding": _finding_block(row), "source": _finding_source(row)} for row in rows
+    ]
 
 
 _LIBRARY_COLS = (
@@ -2258,11 +2340,15 @@ async def resolve_reference(
     journal: str | None = None,
     authors=None,
     year: int | None = None,
+    min_score: float | None = None,
 ) -> list[dict]:
     """Deterministic reference -> library rows. DOI exact when present; otherwise
-    a conjunction of normalized fields: exact-normalized title equality, plus
-    author-surname and year/journal corroboration. Returns 0, 1, or many rows;
-    the caller decides what to do with ambiguity (never auto-picks here)."""
+    a conjunction of normalized fields: a fuzzy title match (the shared
+    sources._score_candidate scorer + threshold, so misspellings still resolve),
+    plus author-surname and year/journal corroboration. "Deterministic" means
+    rule-based and repeatable — a fixed scorer + fixed threshold, not embeddings.
+    Returns 0, 1, or many rows ranked by score; the caller decides what to do
+    with ambiguity (never auto-picks here)."""
     pool = await get_pool()
 
     # 1. DOI is exact and authoritative.
@@ -2274,8 +2360,8 @@ async def resolve_reference(
             )
         return [dict(r) for r in rows]
 
-    # 2. No DOI: coarse SQL prefilter on exact structured fields, then
-    #    normalized-equality gate in Python (mirrors sources._normalize_title).
+    # 2. No DOI: coarse SQL filter on exact structured fields, then a fuzzy
+    #    title gate (shared scorer + threshold) and author-surname conjunction.
     clauses: list[str] = []
     params: list = []
     if year is not None:
@@ -2293,9 +2379,19 @@ async def resolve_reference(
     cands = [dict(r) for r in rows]
 
     if title:
-        wanted = sources._normalize_title(title)
-        cands = [r for r in cands if sources._normalize_title(r.get("title")) == wanted]
+        threshold = sources.MATCH_THRESHOLD if min_score is None else min_score
+        scored = [
+            (r, sources._score_candidate(title, r, year=year, authors=authors))
+            for r in cands
+        ]
+        cands = [
+            r
+            for r, s in sorted(scored, key=lambda t: t[1], reverse=True)
+            if s >= threshold
+        ]
     if authors:
+        # Authors given are part of the deterministic conjunction: a row must
+        # share a surname (corroboration alone can't override a missing author).
         wanted_surnames = _surnames(authors)
         if wanted_surnames:
             cands = [
@@ -2791,7 +2887,9 @@ def _venue_token(source: str | None) -> str | None:
     if not source:
         return None
     words = [
-        w for w in re.sub(r"[^\w\s]", " ", source).split() if w.lower() not in _VENUE_STOP
+        w
+        for w in re.sub(r"[^\w\s]", " ", source).split()
+        if w.lower() not in _VENUE_STOP
     ]
     if not words:
         return None

@@ -860,28 +860,75 @@ class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_fetch_paper_topic_returns_candidates_without_storing(self):
         candidates = [{"title": "A Paper", "doi": "10.1/x", "authors": ["Ada"]}]
-        store_paper = AsyncMock()
+        store_paper_mock = AsyncMock()
         with (
             patch.object(brain.sources, "resolve", return_value=candidates),
-            patch.object(brain, "_store_paper", store_paper),
+            patch.object(brain, "_store_paper", store_paper_mock),
         ):
-            result = await brain.fetch_paper(topic="bandwidth selection")
+            result = await brain.fetch_papers(topic="bandwidth selection")
 
         self.assertEqual(result["mode"], "topic")
         self.assertEqual(result["candidates"], candidates)
-        store_paper.assert_not_awaited()
+        self.assertEqual(result["stored"], 0)
+        store_paper_mock.assert_not_awaited()
+
+    async def test_fetch_paper_topic_store_true_bulk_stores(self):
+        candidates = [{"title": "A Paper", "doi": "10.1/x"}]
+        report = {"stored": 1, "deduped": 0, "results": [{"id": "id-1"}]}
+        with (
+            patch.object(brain.sources, "resolve", return_value=candidates),
+            patch.object(brain, "store_papers", AsyncMock(return_value=report)),
+        ):
+            result = await brain.fetch_papers(topic="water", store=True)
+
+        self.assertEqual(result["stored"], 1)
+        self.assertEqual(result["stored_ids"], ["id-1"])
 
     async def test_fetch_paper_lookup_stores_resolved_paper(self):
         meta = {"title": "A Paper", "doi": "10.1/x"}
-        store_paper = AsyncMock(return_value={"title": "A Paper", "deduped": False})
+        store_paper_mock = AsyncMock(
+            return_value={"title": "A Paper", "deduped": False}
+        )
         with (
             patch.object(brain.sources, "resolve", return_value=meta),
-            patch.object(brain, "_store_paper", store_paper),
+            patch.object(brain, "_store_paper", store_paper_mock),
         ):
-            result = await brain.fetch_paper(identifier="10.1/x")
+            result = await brain.fetch_papers(identifier="10.1/x")
 
         self.assertTrue(result["found"])
-        store_paper.assert_awaited_once()
+        store_paper_mock.assert_awaited_once()
+
+    async def test_known_item_passes_threshold_and_corroboration(self):
+        captured = {}
+
+        def fake_resolve(**kw):
+            captured.update(kw)
+            return {"title": "A", "doi": "10.1/a"}
+
+        with (
+            patch.object(brain.sources, "resolve", fake_resolve),
+            patch.object(
+                brain,
+                "_store_paper",
+                AsyncMock(
+                    return_value={
+                        "id": "1",
+                        "title": "A",
+                        "abstract_stored": True,
+                        "embedded": True,
+                        "deduped": False,
+                    }
+                ),
+            ),
+        ):
+            out = await brain.fetch_papers(
+                identifier="A title", year=2015, authors=["Doe"], title_threshold=0.7
+            )
+
+        self.assertTrue(out["found"])
+        self.assertEqual(captured["min_score"], 0.7)
+        self.assertEqual(captured["year"], 2015)
+        self.assertEqual(captured["authors"], ["Doe"])
 
     async def test_fetch_paper_tool_formats_lookup_result(self):
         mcp = _Mcp()
@@ -896,8 +943,8 @@ class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
             "embedded": True,
             "deduped": False,
         }
-        with patch.object(brain, "fetch_paper", AsyncMock(return_value=result)):
-            out = await mcp.tools["fetch_paper"](identifier="10.1/x")
+        with patch.object(brain, "fetch_papers", AsyncMock(return_value=result)):
+            out = await mcp.tools["fetch_papers"](identifier="10.1/x")
 
         self.assertIn("Fetched: A Paper", out)
         self.assertIn("Abstract: stored and embedded", out)
@@ -935,8 +982,8 @@ class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
             "embedded": False,
             "deduped": False,
         }
-        with patch.object(brain, "fetch_paper", AsyncMock(return_value=result)):
-            out = await mcp.tools["fetch_paper"](identifier="10.1/x")
+        with patch.object(brain, "fetch_papers", AsyncMock(return_value=result)):
+            out = await mcp.tools["fetch_papers"](identifier="10.1/x")
 
         self.assertIn("embedding deferred", out)
 
@@ -960,8 +1007,10 @@ class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
             },
             "10.1/c": {"mode": "lookup", "found": False},
         }
-        fetch_one = AsyncMock(side_effect=lambda identifier, **kw: outcomes[identifier])
-        with patch.object(brain, "fetch_paper", fetch_one):
+        fetch_one = AsyncMock(
+            side_effect=lambda *, identifier, **kw: outcomes[identifier]
+        )
+        with patch.object(brain, "_fetch_one", fetch_one):
             result = await brain.fetch_papers(
                 identifiers=["10.1/a", "10.1/b", "10.1/c", "  "]
             )
@@ -996,7 +1045,7 @@ class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
             },
         }
         with patch.object(brain, "fetch_papers", AsyncMock(return_value=batch)):
-            out = await mcp.tools["fetch_paper"](identifiers=["10.1/a", "10.1/c"])
+            out = await mcp.tools["fetch_papers"](identifiers=["10.1/a", "10.1/c"])
 
         self.assertIn("1 fetched", out)
         self.assertIn("fetched: A", out)
@@ -1059,6 +1108,41 @@ class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["failed"], 1)
         self.assertEqual(result["pending_after"], 1)
         self.assertEqual(len(connection.updates), 1)
+
+
+class StorePapersTests(unittest.IsolatedAsyncioTestCase):
+    async def test_enriches_then_stores_and_summarizes(self):
+        seen = []
+
+        async def fake_store(meta, *, force=False):
+            seen.append(meta)
+            return {
+                "id": f"id-{len(seen)}",
+                "title": meta["title"],
+                "embedded": True,
+                "deduped": False,
+            }
+
+        with (
+            patch.object(brain, "store_acquired_paper", fake_store),
+            patch.object(
+                brain, "get_pool", AsyncMock(return_value=_Pool(_FetchConnection([])))
+            ),
+            patch.object(
+                brain.sources, "crossref_lookup", lambda d, k: {"abstract": "filled"}
+            ),
+            patch.object(brain.venues, "match", AsyncMock(return_value="AJAE")),
+        ):
+            out = await brain.store_papers(
+                [{"title": "A", "doi": "10.1/a"}]  # no abstract -> enriched
+            )
+        self.assertEqual(out["stored"], 1)
+        self.assertEqual(seen[0]["abstract"], "filled")
+        self.assertEqual(seen[0]["venue_abbrev"], "AJAE")
+
+    async def test_empty_is_noop(self):
+        out = await brain.store_papers([])
+        self.assertEqual(out, {"stored": 0, "deduped": 0, "results": []})
 
 
 class LibrarySearchTests(unittest.IsolatedAsyncioTestCase):
@@ -1479,9 +1563,16 @@ class LibraryPathOverrideCopyTargetTest(unittest.IsolatedAsyncioTestCase):
 
 def _lib_row(**kw):
     base = {
-        "id": "x", "title": "T", "authors": [], "year": None, "source": None,
-        "doc_type": "paper", "status": "ingested", "filepath": None,
-        "doi": None, "abstract": None,
+        "id": "x",
+        "title": "T",
+        "authors": [],
+        "year": None,
+        "source": None,
+        "doc_type": "paper",
+        "status": "ingested",
+        "filepath": None,
+        "doi": None,
+        "abstract": None,
     }
     base.update(kw)
     return base
@@ -1504,6 +1595,16 @@ class ReferenceResolveTests(unittest.IsolatedAsyncioTestCase):
         conn = _FetchConnection(rows)
         with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
             out = await brain.resolve_reference(title="cattlemens association")
+        self.assertEqual([r["id"] for r in out], ["1"])
+
+    async def test_title_fuzzy_match_tolerates_misspelling(self):
+        rows = [
+            _lib_row(id="1", title="Cattlemen's Association", year=1990),
+            _lib_row(id="2", title="Totally Unrelated", year=1990),
+        ]
+        conn = _FetchConnection(rows)
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
+            out = await brain.resolve_reference(title="catllemens asociation")  # typos
         self.assertEqual([r["id"] for r in out], ["1"])
 
     async def test_author_surname_corroboration_disambiguates(self):
@@ -1639,12 +1740,19 @@ class CitekeyTests(unittest.TestCase):
 
     def test_venue_abbrev_wins_over_source(self):
         self.assertEqual(
-            brain.citekey(["Jane Smith"], 2021, "AJAE", "American Journal of Agricultural Economics"),
+            brain.citekey(
+                ["Jane Smith"],
+                2021,
+                "AJAE",
+                "American Journal of Agricultural Economics",
+            ),
             "Smith-2021-AJAE",
         )
 
     def test_na_only_when_no_venue_and_no_source(self):
-        self.assertEqual(brain.citekey(["Jane Smith"], 2021, None, None), "Smith-2021-NA")
+        self.assertEqual(
+            brain.citekey(["Jane Smith"], 2021, None, None), "Smith-2021-NA"
+        )
 
     def test_venue_token_helper(self):
         self.assertEqual(brain._venue_token("arXiv"), "arXiv")
@@ -1698,8 +1806,8 @@ class RelevanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(scores[1], 0.0)
 
 
-class StoreOneTests(unittest.IsolatedAsyncioTestCase):
-    async def test_store_one_wraps_store_acquired_paper(self):
+class StorePapersWrapTests(unittest.IsolatedAsyncioTestCase):
+    async def test_store_papers_wraps_store_acquired_paper(self):
         async def fake_store(meta, *, force=False):
             return {
                 "id": "lib-9",
@@ -1708,9 +1816,22 @@ class StoreOneTests(unittest.IsolatedAsyncioTestCase):
                 "deduped": False,
             }
 
-        with patch.object(brain, "store_acquired_paper", fake_store):
-            out = await brain.store_one({"title": "A Paper"})
-        self.assertEqual(out, {"id": "lib-9", "title": "A Paper", "deduped": False})
+        with (
+            patch.object(brain, "store_acquired_paper", fake_store),
+            patch.object(
+                brain, "get_pool", AsyncMock(return_value=_Pool(_FetchConnection([])))
+            ),
+            patch.object(brain.venues, "match", AsyncMock(return_value=None)),
+        ):
+            out = await brain.store_papers([{"title": "A Paper"}])
+        self.assertEqual(
+            out,
+            {
+                "stored": 1,
+                "deduped": 0,
+                "results": [{"id": "lib-9", "title": "A Paper", "deduped": False}],
+            },
+        )
 
 
 class RerankTests(unittest.IsolatedAsyncioTestCase):
@@ -1782,9 +1903,7 @@ class RerankTests(unittest.IsolatedAsyncioTestCase):
     def test_candidate_count_overfetches_only_when_enabled(self):
         with patch.object(brain, "RERANK_CONFIG", {"enabled": False}):
             self.assertEqual(brain._candidate_count(5), 5)
-        with patch.object(
-            brain, "RERANK_CONFIG", {"enabled": True, "candidates": 30}
-        ):
+        with patch.object(brain, "RERANK_CONFIG", {"enabled": True, "candidates": 30}):
             self.assertEqual(brain._candidate_count(5), 30)
             self.assertEqual(brain._candidate_count(40), 40)  # count beats candidates
 

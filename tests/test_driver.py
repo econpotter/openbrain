@@ -4,8 +4,8 @@ Each tool wraps a deterministic primitive; here we drive the registered tool
 functions directly against a fake MCP and monkeypatched brain/sources, so no
 live network or database is touched. The result keys must match the
 agentic-researcher Openbrain client contract exactly: get_citations ->
-{citations}, score_relevance -> {scores}, store_paper -> {id, title, deduped},
-find_papers -> {ids}.
+{citations}, score_relevance -> {scores}, store_papers -> {stored, deduped,
+results}, find_papers -> {ids}.
 """
 
 import asyncio
@@ -83,9 +83,7 @@ class GetCitationsTests(unittest.TestCase):
 
     def test_empty_neighbors_serialize_to_empty_list(self):
         tools = _register(driver)
-        with patch(
-            "openbrain.sources.openalex_citation_neighbors", return_value=[]
-        ):
+        with patch("openbrain.sources.openalex_citation_neighbors", return_value=[]):
             out = asyncio.run(tools["get_citations"]("W0"))
         self.assertEqual(json.loads(out), {"citations": []})
 
@@ -97,9 +95,7 @@ class ScoreRelevanceTests(unittest.TestCase):
             "openbrain.brain.relevance",
             new=AsyncMock(return_value=[0.91, 0.12]),
         ) as rel:
-            out = asyncio.run(
-                tools["score_relevance"](["a1", "a2"], ["t1", "t2"])
-            )
+            out = asyncio.run(tools["score_relevance"](["a1", "a2"], ["t1", "t2"]))
         rel.assert_awaited_once_with(["a1", "a2"], ["t1", "t2"])
         self.assertEqual(json.loads(out), {"scores": [0.91, 0.12]})
 
@@ -113,15 +109,19 @@ class ScoreRelevanceTests(unittest.TestCase):
                 asyncio.run(tools["score_relevance"]([], ["t1"]))
 
 
-class StorePaperTests(unittest.TestCase):
-    def test_returns_id_title_deduped(self):
+class StorePapersTests(unittest.TestCase):
+    def test_returns_store_rollup(self):
         tools = _register(driver)
-        ret = {"id": "lib-9", "title": "Stored", "deduped": False}
+        ret = {
+            "stored": 1,
+            "deduped": 0,
+            "results": [{"id": "lib-9", "title": "Stored", "deduped": False}],
+        }
         with patch(
-            "openbrain.brain.store_one", new=AsyncMock(return_value=ret)
+            "openbrain.brain.store_papers", new=AsyncMock(return_value=ret)
         ) as store:
-            out = asyncio.run(tools["store_paper"]({"title": "Stored"}))
-        store.assert_awaited_once_with({"title": "Stored"})
+            out = asyncio.run(tools["store_papers"]([{"title": "Stored"}]))
+        store.assert_awaited_once_with([{"title": "Stored"}])
         self.assertEqual(json.loads(out), ret)
 
 

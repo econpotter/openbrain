@@ -108,71 +108,102 @@ class ResolveTests(unittest.TestCase):
             self.assertIsNone(sources.resolve(identifier="10.1/x", order=["openalex"]))
 
 
-class TitleExactMatchTests(unittest.TestCase):
-    """Known-item title lookups must only return a paper whose title matches the
-    query exactly (after normalization). A nearest-but-wrong hit is dropped, so
-    generic/partial titles can no longer corrupt the library."""
+class ScoreCandidateTests(unittest.TestCase):
+    def test_near_title_scores_high(self):
+        cand = {"title": "Optimal Bandwidth Choice for Regression"}
+        s = sources._score_candidate("Optimal Bandwidth Choice for Regressions", cand)
+        self.assertGreaterEqual(s, sources.MATCH_THRESHOLD)
 
-    def test_title_lookup_rejects_nonmatching_paper(self):
-        wrong = sources.PaperMeta(
-            title="QuickStats: Suicide Rates for Teens Aged 15-19 Years",
-            doi="10.9/cdc",
-            source_name="openalex",
-        )
-        registry = {"openalex": (lambda i, k: wrong, lambda q, n: [wrong])}
-        with patch.object(sources, "_REGISTRY", registry):
-            self.assertIsNone(
-                sources.resolve(identifier="QuickStats", order=["openalex"])
-            )
+    def test_unrelated_title_scores_low(self):
+        cand = {"title": "QuickStats: Suicide Rates for Teens"}
+        s = sources._score_candidate("Land Speculation and Development", cand)
+        self.assertLess(s, sources.MATCH_THRESHOLD)
 
-    def test_title_lookup_returns_exact_match(self):
-        rec = sources.PaperMeta(
-            title="Optimal Bandwidth Choice",
-            doi="10.1/x",
-            source_name="openalex",
+    def test_year_and_author_corroboration_add(self):
+        cand = {"title": "Water Policy", "year": 2015, "authors": ["Jane Doe"]}
+        base = sources._score_candidate("Water Policy", cand)
+        boosted = sources._score_candidate(
+            "Water Policy", cand, year=2015, authors=["Doe"]
         )
-        registry = {"openalex": (lambda i, k: rec, lambda q, n: [rec])}
-        with patch.object(sources, "_REGISTRY", registry):
-            merged = sources.resolve(
-                identifier="Optimal Bandwidth Choice", order=["openalex"]
-            )
-        self.assertIsNotNone(merged)
-        self.assertEqual(merged["title"], "Optimal Bandwidth Choice")
+        self.assertGreater(boosted, base)
 
-    def test_title_match_ignores_case_punctuation_whitespace(self):
-        rec = sources.PaperMeta(
-            title="Optimal Bandwidth Choice",
-            doi="10.1/x",
-            source_name="openalex",
-        )
-        registry = {"openalex": (lambda i, k: rec, lambda q, n: [rec])}
-        with patch.object(sources, "_REGISTRY", registry):
-            merged = sources.resolve(
-                identifier="  optimal,  bandwidth   choice. ", order=["openalex"]
-            )
-        self.assertIsNotNone(merged)
 
-    def test_title_lookup_keeps_only_exact_survivor_across_sources(self):
-        wrong = sources.PaperMeta(
-            title="Some Unrelated Paper", doi="10.2/y", source_name="openalex"
-        )
-        right = sources.PaperMeta(
+class KnownItemFetchTests(unittest.TestCase):
+    def test_short_circuits_on_first_source_above_threshold(self):
+        hit = sources.PaperMeta(
             title="Land Speculation and Development",
             doi="10.1/x",
-            source_name="crossref",
+            source_name="openalex",
         )
+        later_called = {"n": 0}
+
+        def later_search(q, n):
+            later_called["n"] += 1
+            return []
+
         registry = {
-            "openalex": (lambda i, k: wrong, lambda q, n: [wrong]),
-            "crossref": (lambda i, k: right, lambda q, n: [right]),
+            "openalex": (lambda i, k: None, lambda q, n: [hit]),
+            "crossref": (lambda i, k: None, later_search),
         }
         with patch.object(sources, "_REGISTRY", registry):
             merged = sources.resolve(
                 identifier="Land Speculation and Development",
                 order=["openalex", "crossref"],
             )
-        self.assertIsNotNone(merged)
         self.assertEqual(merged["doi"], "10.1/x")
-        self.assertEqual(merged["source_name"], "crossref")
+        self.assertEqual(later_called["n"], 0)  # never searched the 2nd source
+
+    def test_enriches_winner_from_remaining_by_doi(self):
+        winner = sources.PaperMeta(
+            title="A Paper", doi="10.1/x", abstract=None, source_name="openalex"
+        )
+        cross = sources.PaperMeta(
+            title="A Paper",
+            doi="10.1/x",
+            abstract="The abstract.",
+            bibtex="@a{}",
+            source_name="crossref",
+        )
+        registry = {
+            "openalex": (lambda i, k: None, lambda q, n: [winner]),
+            "crossref": (lambda i, k: cross if k == "doi" else None, lambda q, n: []),
+        }
+        with patch.object(sources, "_REGISTRY", registry):
+            merged = sources.resolve(
+                identifier="A Paper", order=["openalex", "crossref"]
+            )
+        self.assertEqual(merged["abstract"], "The abstract.")  # filled from crossref
+        self.assertEqual(merged["bibtex"], "@a{}")
+
+    def test_returns_none_when_no_source_above_threshold(self):
+        wrong = sources.PaperMeta(
+            title="QuickStats Teens", doi="10.9/c", source_name="openalex"
+        )
+        registry = {"openalex": (lambda i, k: None, lambda q, n: [wrong])}
+        with patch.object(sources, "_REGISTRY", registry):
+            self.assertIsNone(
+                sources.resolve(
+                    identifier="Land Speculation and Development", order=["openalex"]
+                )
+            )
+
+    def test_doi_known_item_exact_then_enrich(self):
+        oa = sources.PaperMeta(
+            title="P", doi="10.1/x", abstract="abs", source_name="openalex"
+        )
+        cr = sources.PaperMeta(
+            title="P", doi="10.1/x", bibtex="@a{}", source_name="crossref"
+        )
+        registry = {
+            "openalex": (lambda i, k: oa, lambda q, n: []),
+            "crossref": (lambda i, k: cr, lambda q, n: []),
+        }
+        with patch.object(sources, "_REGISTRY", registry):
+            merged = sources.resolve(
+                identifier="10.1/x", id_kind="doi", order=["openalex", "crossref"]
+            )
+        self.assertEqual(merged["abstract"], "abs")
+        self.assertEqual(merged["bibtex"], "@a{}")  # enriched
 
     def test_doi_lookup_not_subject_to_title_gate(self):
         # DOI is an exact identifier; a differing title must still be returned.

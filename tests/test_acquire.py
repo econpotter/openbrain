@@ -24,199 +24,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql://test/openbrain")
 
 from typer.testing import CliRunner  # noqa: E402
 
-from openbrain import acquire  # noqa: E402
 from openbrain.cli import app  # noqa: E402
-
-
-class DedupTests(unittest.TestCase):
-    def test_dedup_drops_doi_and_title_year_dups(self):
-        recs = [
-            {"doi": "10.1/a", "title": "X", "year": 2020},
-            {"doi": "10.1/a", "title": "X dup", "year": 2020},  # same DOI
-            {"doi": None, "title": "Y Study", "year": 2019},
-            {"doi": None, "title": "y study", "year": 2019},  # same title+year
-        ]
-        out = acquire.dedup_records(recs)
-        self.assertEqual(len(out), 2)
-
-
-class PrefilterTests(unittest.TestCase):
-    def setUp(self):
-        self.base = {
-            "abstract": "water demand elasticity",
-            "year": 2021,
-            "venue_abbrev": "AJAE",
-        }
-
-    def test_drops_when_no_abstract(self):
-        self.assertEqual(
-            acquire.prefilter({**self.base, "abstract": None}, "water", None, 2, None),
-            "no_abstract",
-        )
-
-    def test_drops_old_papers(self):
-        self.assertEqual(
-            acquire.prefilter({**self.base, "year": 2000}, "water", 2015, 2, None),
-            "old",
-        )
-
-    def test_keeps_when_overlap_meets_threshold(self):
-        self.assertIsNone(acquire.prefilter(self.base, "water demand", None, 2, None))
-
-    def test_drops_low_overlap(self):
-        self.assertEqual(
-            acquire.prefilter(
-                self.base, "quantum chromodynamics physics", None, 2, None
-            ),
-            "low_overlap",
-        )
-
-    def test_drops_venue_not_in_filter(self):
-        self.assertEqual(
-            acquire.prefilter(self.base, "water demand", None, 2, {"WRR"}), "venue"
-        )
-
-
-class AcquirePipelineTests(unittest.IsolatedAsyncioTestCase):
-    async def test_dry_run_stores_nothing(self):
-        recs = [
-            {
-                "title": "Water demand",
-                "abstract": "water demand elasticity",
-                "year": 2021,
-                "doi": "10.1/a",
-                "issn_l": "0002-9092",
-                "venue_source_id": "S123",
-                "concepts": ["Water"],
-                "authors": [],
-                "source": "AJAE",
-            }
-        ]
-        stored = []
-
-        async def fake_store(meta, **k):
-            stored.append(meta)
-            return {"id": "x", "embedded": True, "deduped": False}
-
-        with (
-            patch.object(acquire.brain, "get_pool", AsyncMock(return_value=object())),
-            patch.object(
-                acquire.sources,
-                "openalex_search_paged",
-                lambda *a, **k: (recs, False),
-            ),
-            patch.object(acquire.sources, "crossref_lookup", lambda *a, **k: None),
-            patch.object(acquire.venues_mod, "match", AsyncMock(return_value="AJAE")),
-            patch.object(acquire.brain, "store_acquired_paper", fake_store),
-        ):
-            report = await acquire.acquire("water demand", dry_run=True)
-
-        self.assertEqual(report["found"], 1)
-        self.assertEqual(report["stored"], 0)
-        self.assertEqual(stored, [])
-
-    async def test_real_run_stores_survivors(self):
-        recs = [
-            {
-                "title": "Water demand",
-                "abstract": "water demand elasticity",
-                "year": 2021,
-                "doi": "10.1/a",
-                "concepts": ["Water"],
-                "authors": [],
-                "source": "AJAE",
-            },
-            {
-                "title": "Quantum chromodynamics",
-                "abstract": "gluon field lattice",
-                "year": 2021,
-                "doi": "10.1/b",
-                "concepts": [],
-                "authors": [],
-                "source": "PhysRev",
-            },
-        ]
-        stored = []
-
-        async def fake_store(meta, **k):
-            stored.append(meta["title"])
-            return {"id": "x", "embedded": True, "deduped": False}
-
-        with (
-            patch.object(acquire.brain, "get_pool", AsyncMock(return_value=object())),
-            patch.object(
-                acquire.sources,
-                "openalex_search_paged",
-                lambda *a, **k: (recs, False),
-            ),
-            patch.object(acquire.sources, "crossref_lookup", lambda *a, **k: None),
-            patch.object(acquire.venues_mod, "match", AsyncMock(return_value=None)),
-            patch.object(acquire.brain, "store_acquired_paper", fake_store),
-        ):
-            report = await acquire.acquire("water demand", min_overlap=2)
-
-        # Only the water paper meets the overlap gate; the physics paper drops.
-        self.assertEqual(report["stored"], 1)
-        self.assertEqual(stored, ["Water demand"])
-        self.assertEqual(report["prefiltered_out"]["low_overlap"], 1)
-
-    async def test_report_carries_stored_ids_in_store_order(self):
-        recs = [
-            {
-                "title": "Water demand",
-                "abstract": "water demand elasticity",
-                "year": 2021,
-                "doi": "10.1/a",
-                "concepts": ["Water"],
-                "authors": [],
-                "source": "AJAE",
-            },
-            {
-                "title": "Water pricing",
-                "abstract": "water demand pricing policy",
-                "year": 2022,
-                "doi": "10.1/b",
-                "concepts": ["Water"],
-                "authors": [],
-                "source": "AJAE",
-            },
-            {
-                "title": "Water rights",
-                "abstract": "water demand allocation rights",
-                "year": 2023,
-                "doi": "10.1/c",
-                "concepts": ["Water"],
-                "authors": [],
-                "source": "AJAE",
-            },
-        ]
-        # First survivor stores fresh, second dedupes (excluded from ids),
-        # third stores fresh — so stored_ids must be ["lib-1", "lib-3"].
-        returns = [
-            {"id": "lib-1", "embedded": True, "deduped": False},
-            {"id": "lib-2", "embedded": False, "deduped": True},
-            {"id": "lib-3", "embedded": True, "deduped": False},
-        ]
-        calls = iter(returns)
-
-        async def fake_store(meta, **k):
-            return next(calls)
-
-        with (
-            patch.object(acquire.brain, "get_pool", AsyncMock(return_value=object())),
-            patch.object(
-                acquire.sources,
-                "openalex_search_paged",
-                lambda *a, **k: (recs, False),
-            ),
-            patch.object(acquire.sources, "crossref_lookup", lambda *a, **k: None),
-            patch.object(acquire.venues_mod, "match", AsyncMock(return_value="AJAE")),
-            patch.object(acquire.brain, "store_acquired_paper", fake_store),
-        ):
-            report = await acquire.acquire("water demand", min_overlap=2)
-
-        self.assertEqual(report["stored"], 2)
-        self.assertEqual(report["stored_ids"], ["lib-1", "lib-3"])
 
 
 class CliTests(unittest.TestCase):
@@ -273,13 +81,19 @@ class CliTests(unittest.TestCase):
         self.assertIn("cosines", res.stdout)
         self.assertIn("0.9", res.stdout)
 
-    def test_cli_store_paper_emits_id_title_deduped(self):
-        async def fake(meta):
-            return {"id": "lib-9", "title": meta["title"], "deduped": False}
+    def test_cli_store_papers_emits_rollup(self):
+        async def fake(papers, **k):
+            return {
+                "stored": len(papers),
+                "deduped": 0,
+                "results": [
+                    {"id": "lib-9", "title": papers[0]["title"], "deduped": False}
+                ],
+            }
 
-        with patch("openbrain.brain.store_one", fake):
+        with patch("openbrain.brain.store_papers", fake):
             res = CliRunner().invoke(
-                app, ["store-paper", "--json", '{"title": "A Paper"}']
+                app, ["store-papers", "--json", '[{"title": "A Paper"}]']
             )
         self.assertEqual(res.exit_code, 0)
         self.assertIn("lib-9", res.stdout)

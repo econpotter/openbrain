@@ -9,8 +9,8 @@ leave openbrain; `score_relevance` returns cosines, not vectors.
 
 Each tool returns a JSON string whose keys match the agentic-researcher Openbrain
 client contract exactly: get_citations -> {citations}, score_relevance ->
-{scores}, store_paper -> {id, title, deduped}. The id-returning library search
-lives in tools/library.py as `find_papers` -> {ids}.
+{scores}, store_papers -> {stored, deduped, results}. The id-returning library
+search lives in tools/library.py as `find_papers` -> {ids}.
 """
 
 import asyncio
@@ -47,11 +47,13 @@ def register(mcp):
         return json.dumps({"scores": scores}, indent=2, default=str)
 
     @mcp.tool
-    async def store_paper(paper: dict) -> str:
-        """Store a single paper's metadata into the library (with embedding).
+    async def store_papers(papers: list[dict]) -> str:
+        """Store a chosen list of paper metadata dicts into the library.
 
-        Thin wrapper over the acquire store path so the driver can land a paper
-        it found via the citation walk. Returns {id, title, deduped}; `deduped`
-        is true when the paper already existed and no new row was created."""
-        result = await brain.store_one(paper)
+        Per paper: crossref enrich (when a DOI is present), venue canon, then
+        store with the abstract embedded. The driver calls this to land papers it
+        found via the citation walk after its own relevance gate. Returns
+        {stored, deduped, results:[{id, title, deduped}]}; a paper is `deduped`
+        when it already existed and no new row was created."""
+        result = await brain.store_papers(papers)
         return json.dumps(result, indent=2, default=str)

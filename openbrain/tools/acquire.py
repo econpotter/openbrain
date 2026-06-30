@@ -22,22 +22,20 @@ def register(mcp):
         kind: str | None = None,
         year_min: int | None = None,
         year_max: int | None = None,
-        status: str | None = None,
         concept: str | None = None,
         has_abstract: bool | None = None,
         sort: str = "year",
         limit: int = 50,
     ) -> str:
         """Deterministic structured query over the library: exact filters on
-        venue (canonical abbrev), kind (journal/preprint/…), year range, reading
-        status, and concept. This is "search by journal/year/status" done right —
+        venue (canonical abbrev), kind (journal/preprint/…), year range, and
+        concept. This is "search by journal/year" done right —
         distinct from the semantic find_papers tool."""
         rows = await brain.query_library_struct(
             venue=venue,
             kind=kind,
             year_min=year_min,
             year_max=year_max,
-            status=status,
             concept=concept,
             has_abstract=has_abstract,
             sort=sort,
@@ -114,14 +112,13 @@ def register(mcp):
     async def export_bibtex(
         venue: str | None = None,
         year_min: int | None = None,
-        status: str | None = None,
         path: str | None = None,
     ) -> str:
         """Generate a .bib from the matching library rows with stable citekeys.
         Writes to `path` if given (returns a confirmation), else returns the
         bibtex string."""
         bibtex = await brain.export_bibtex_records(
-            venue=venue, year_min=year_min, status=status
+            venue=venue, year_min=year_min
         )
         if path:
             with open(path, "w") as fh:

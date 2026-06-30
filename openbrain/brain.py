@@ -1505,27 +1505,69 @@ async def ingest_document_pipeline(
 
     venue_abbrev = await _resolve_venue_abbrev(pool, name=source)
 
+    # Invalidate-on-upgrade: if this paper already exists as an abstract-only
+    # record (fetched metadata, no file), upgrade THAT row in place rather than
+    # inserting a duplicate — attach the file, drop the abstract chunk(s), and
+    # reset findings so derivations re-run from the full text (the new body
+    # chunks land with kind='body' below; backfill re-embeds them).
+    upgrade_id = None
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            INSERT INTO library
-                (title, authors, year, source, doc_type, abstract, filepath,
-                 file_hash, doi, bibtex, venue_abbrev)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            RETURNING id, title
-            """,
-            title,
-            authors,
-            year,
-            source,
-            doc_type,
-            abstract,
-            str(dest),
-            file_hash,
-            doi,
-            bibtex,
-            venue_abbrev,
-        )
+        if doi:
+            r = await conn.fetchrow(
+                "SELECT id FROM library WHERE lower(doi) = lower($1) "
+                "AND file_hash IS NULL",
+                sources._normalize_doi(doi) or doi,
+            )
+            upgrade_id = r["id"] if r else None
+        if upgrade_id is None and title:
+            r = await conn.fetchrow(
+                "SELECT id FROM library WHERE lower(title) = lower($1) "
+                "AND year IS NOT DISTINCT FROM $2 AND file_hash IS NULL",
+                title,
+                year,
+            )
+            upgrade_id = r["id"] if r else None
+
+    if upgrade_id is not None:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE library SET
+                    filepath = $2, file_hash = $3, doc_type = $4,
+                    abstract = COALESCE($5, abstract),
+                    bibtex = COALESCE($6, bibtex),
+                    venue_abbrev = COALESCE($7, venue_abbrev),
+                    findings_status = 'pending'
+                WHERE id = $1
+                RETURNING id, title
+                """,
+                upgrade_id, str(dest), file_hash, doc_type, abstract,
+                bibtex, venue_abbrev,
+            )
+            await conn.execute("DELETE FROM chunks WHERE library_id = $1", upgrade_id)
+            await conn.execute("DELETE FROM findings WHERE paper_id = $1", upgrade_id)
+    else:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO library
+                    (title, authors, year, source, doc_type, abstract, filepath,
+                     file_hash, doi, bibtex, venue_abbrev)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                RETURNING id, title
+                """,
+                title,
+                authors,
+                year,
+                source,
+                doc_type,
+                abstract,
+                str(dest),
+                file_hash,
+                doi,
+                bibtex,
+                venue_abbrev,
+            )
     library_id = row["id"]
 
     chunks = _chunk_document(full_text)
@@ -2162,7 +2204,7 @@ async def _search_chunks_by_vector(
         rows = await conn.fetch(
             f"""
             SELECT c.id AS chunk_id, l.id AS library_id, l.title, l.authors,
-                   l.year, l.source, l.doc_type, l.status,
+                   l.year, l.source, l.doc_type,
                    c.content AS chunk_text, c.section,
                    1 - (c.embedding <=> $1) AS similarity
             FROM chunks c
@@ -2332,7 +2374,7 @@ async def search_findings(
 
 
 _LIBRARY_COLS = (
-    "id, title, authors, year, source, doc_type, status, filepath, doi, abstract"
+    "id, title, authors, year, source, doc_type, filepath, doi, abstract"
 )
 
 
@@ -2435,7 +2477,7 @@ async def find_library_records(query: str) -> list[dict]:
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT id, title, authors, year, source, doc_type, status, filepath, doi, abstract
+            SELECT id, title, authors, year, source, doc_type, filepath, doi, abstract
             FROM library
             WHERE title ILIKE $1
                OR filepath ILIKE $1
@@ -2456,7 +2498,6 @@ async def update_library_record(record_id: str, updates: dict) -> dict | None:
         "source",
         "doc_type",
         "abstract",
-        "status",
         "doi",
         "bibtex",
         "filepath",
@@ -2472,7 +2513,7 @@ async def update_library_record(record_id: str, updates: dict) -> dict | None:
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             f"UPDATE library SET {set_clause} WHERE id = $1 "
-            "RETURNING id, title, authors, year, source, doc_type, status, filepath",
+            "RETURNING id, title, authors, year, source, doc_type, filepath",
             *values,
         )
     return dict(row) if row else None
@@ -2751,7 +2792,6 @@ async def query_library_struct(
     kind: str | None = None,
     year_min: int | None = None,
     year_max: int | None = None,
-    status: str | None = None,
     concept: str | None = None,
     has_abstract: bool | None = None,
     sort: str = "year",
@@ -2775,8 +2815,6 @@ async def query_library_struct(
         add("l.year >= ${n}", year_min)
     if year_max is not None:
         add("l.year <= ${n}", year_max)
-    if status is not None:
-        add("l.status = ${n}", status)
     if concept is not None:
         add("${n} = ANY(l.concepts)", concept)
     if has_abstract is True:
@@ -2793,7 +2831,7 @@ async def query_library_struct(
         rows = await conn.fetch(
             f"""
             SELECT l.id, l.title, l.authors, l.year, l.source, l.venue_abbrev,
-                   l.issn, l.doc_type, l.status, l.doi, l.bibtex, l.concepts,
+                   l.issn, l.doc_type, l.doi, l.bibtex, l.concepts,
                    l.abstract
             FROM library l
             LEFT JOIN venues v ON v.abbrev = l.venue_abbrev
@@ -2996,13 +3034,13 @@ def _render_bibtex(rec: dict, key: str) -> str:
 
 
 async def export_bibtex_records(
-    *, venue: str | None = None, year_min: int | None = None, status: str | None = None
+    *, venue: str | None = None, year_min: int | None = None
 ) -> str:
     """Concatenated .bib for the matching library rows. Prefers each row's stored
     bibtex blob (re-keyed to the stable citekey), else renders a minimal entry.
     Citekey collisions get appended letters."""
     rows = await query_library_struct(
-        venue=venue, year_min=year_min, status=status, limit=10000
+        venue=venue, year_min=year_min, limit=10000
     )
     seen: dict[str, int] = {}
     out: list[str] = []

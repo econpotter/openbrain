@@ -1,6 +1,6 @@
 """
 tools/library.py — ingest_document, ingest_directory, fetch_papers, find_papers,
-                   get_papers, update_paper, update_paper_status tools.
+                   get_papers, update_paper tools.
 """
 
 import json
@@ -428,8 +428,6 @@ def register(mcp):
             lines.append(f"DOI: {record['doi']}")
         if record["doc_type"]:
             lines.append(f"Type: {record['doc_type']}")
-        if record["status"]:
-            lines.append(f"Status: {record['status']}")
         if record["filepath"]:
             lines.append(f"Path: {record['filepath']}")
         if record.get("abstract"):
@@ -448,7 +446,6 @@ def register(mcp):
         source: str | None = None,
         abstract: str | None = None,
         doc_type: str | None = None,
-        status: str | None = None,
         doi: str | None = None,
     ) -> str:
         """
@@ -456,7 +453,7 @@ def register(mcp):
         `match` (a doi/title, resolved deterministically like get_papers).
 
         Use this to correct catalog metadata after ingestion. Do not re-ingest a
-        document just to fix title, authors, DOI, source, type, or status.
+        document just to fix title, authors, DOI, source, or type.
 
         Supply bibtex to populate multiple fields at once from a BibTeX entry.
         Any explicitly provided fields (title, authors, etc.) override the BibTeX values.
@@ -475,7 +472,6 @@ def register(mcp):
             source:    New source/journal, auto-abbreviated (overrides bibtex).
             abstract:  New abstract (overrides bibtex).
             doc_type:  New document type.
-            status:    New status — ingested | reading | read | archived.
             doi:       New DOI (overrides bibtex).
         """
         record = await _locate_library_record(id, match)
@@ -512,8 +508,6 @@ def register(mcp):
             updates["abstract"] = abstract
         if doc_type is not None:
             updates["doc_type"] = doc_type
-        if status is not None:
-            updates["status"] = status
         if doi is not None:
             updates["doi"] = doi
         if not updates:
@@ -522,34 +516,4 @@ def register(mcp):
         updated = await brain.update_library_record(str(record["id"]), updates)
         if not updated:
             return "Update failed."
-        return (
-            f"Updated: {updated['title']} [{updated['doc_type']}] — {updated['status']}"
-        )
-
-    @mcp.tool
-    async def update_paper_status(
-        status: str,
-        id: str | None = None,
-        match: str | None = None,
-    ) -> str:
-        """
-        Update the reading status of one library record, identified by `id`
-        (uuid) or `match` (a doi/title).
-
-        Use this when the user says a paper is now reading, read, archived, or
-        should return to ingested.
-
-        Args:
-            status: ingested | reading | read | archived
-            id:     Library uuid (exact). Preferred when you have it.
-            match:  A doi or title to locate the record when you lack the uuid.
-        """
-        record = await _locate_library_record(id, match)
-        if isinstance(record, str):
-            return record
-        updated = await brain.update_library_record(
-            str(record["id"]), {"status": status}
-        )
-        if not updated:
-            return "Update failed."
-        return f"Updated: {updated['title']} → {updated['status']}"
+        return f"Updated: {updated['title']} [{updated['doc_type']}]"

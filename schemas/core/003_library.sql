@@ -12,8 +12,6 @@ CREATE TABLE library (
     file_hash   TEXT UNIQUE,       -- SHA256, used for deduplication.
                                    -- NULL for metadata-only records (fetch_paper);
                                    -- Postgres allows multiple NULLs under UNIQUE.
-    status      TEXT DEFAULT 'ingested'
-                CHECK (status IN ('ingested', 'reading', 'read', 'archived')),
     metadata    JSONB DEFAULT '{}',
     doi         TEXT,
     bibtex      TEXT,

@@ -2279,15 +2279,6 @@ async def find_library_records(query: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-async def get_library_record(query: str) -> dict | None:
-    matches = await find_library_records(query)
-    if not matches:
-        return None
-    if len(matches) > 1:
-        return {"multiple": [r["title"] for r in matches]}
-    return matches[0]
-
-
 async def update_library_record(record_id: str, updates: dict) -> dict | None:
     allowed = {
         "title",

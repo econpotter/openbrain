@@ -1100,10 +1100,11 @@ class LibrarySearchTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "Updated: Paper → read")
 
-    async def test_get_library_record_formats_metadata(self):
+    async def test_get_papers_formats_metadata(self):
         mcp = _Mcp()
         library_tools.register(mcp)
         record = {
+            "id": "library-1",
             "title": "Paper",
             "authors": ["Ada"],
             "year": 2026,
@@ -1114,8 +1115,8 @@ class LibrarySearchTests(unittest.IsolatedAsyncioTestCase):
             "filepath": "/tmp/paper.pdf",
             "abstract": "Abstract text.",
         }
-        with patch.object(brain, "get_library_record", AsyncMock(return_value=record)):
-            result = await mcp.tools["get_library_record"]("Paper")
+        with patch.object(brain, "resolve_reference", AsyncMock(return_value=[record])):
+            result = await mcp.tools["get_papers"](title="Paper")
 
         self.assertIn("Authors: Ada", result)
         self.assertIn("Path: /tmp/paper.pdf", result)

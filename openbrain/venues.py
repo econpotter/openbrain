@@ -1,7 +1,7 @@
 """
 venues.py — venue registry: load/seed the `venues` table, the venue-match
-cascade (issn_l → source_id → normalized name), and the lexical-overlap helper
-used by the acquire prefilter.
+cascade (issn_l → source_id → normalized name), and a stdlib lexical-overlap
+helper (a deterministic recall signal for callers that gate relevance).
 
 Pure helpers (normalize_name, lexical_overlap, load_seeds) have no DB
 dependency. seed_db/match take a brain.get_pool() pool and follow openbrain's

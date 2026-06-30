@@ -1,6 +1,6 @@
 """
-tools/library.py — ingest_document, ingest_directory, find_papers,
-                   update_library, update_library_status tools.
+tools/library.py — ingest_document, ingest_directory, fetch_papers, find_papers,
+                   get_papers, update_library, update_library_status tools.
 """
 
 import json
@@ -116,31 +116,38 @@ def register(mcp):
         return await ingest_document(str(path), doc_type, force, bibtex, title)
 
     @mcp.tool
-    async def fetch_paper(
+    async def fetch_papers(
         identifier: str | None = None,
         identifiers: list[str] | None = None,
         topic: str | None = None,
         doc_type: str = "paper",
         sources: str | None = None,
+        store: bool = False,
+        author: str | None = None,
+        year: int | None = None,
+        title_threshold: float | None = None,
         force: bool = False,
     ) -> str:
         """
-        Fetch paper metadata and abstract from external sources, without a local file.
+        Fetch papers from external sources (OpenAlex/Crossref/Semantic Scholar/
+        arXiv) into the openbrain library, without a local file.
 
         Prefer a DOI or arXiv ID whenever you have one — those are exact lookups.
-        Title lookups require an exact (normalized) title match against the source
-        and return "not found" otherwise, so a partial or generic title will not
-        resolve. Only fall back to a title when no DOI/arXiv ID is available.
+        A title query tolerates slight misspellings (fuzzy match) but a generic or
+        unrelated title still resolves to "not found"; author/year/title_threshold
+        tune the match.
 
-        Three modes:
-          - Lookup: supply identifier (DOI, arXiv ID, or title/author text). Resolves
-            one paper across sources, stores it as a library record, and embeds the
-            abstract so it becomes semantically searchable via find_papers.
-          - Batch: supply identifiers (a list of DOIs/arXiv IDs/titles). Each is looked
-            up and stored independently; one bad identifier does not abort the rest.
-            Returns a per-item summary.
-          - Topic: supply topic instead. Returns a ranked candidate list and stores
-            nothing — pick one and re-call with its DOI or title as identifier.
+        Modes (by input):
+          - Lookup: supply identifier (DOI, arXiv ID, or title/author text).
+            Resolves one paper across sources (first above threshold wins, then
+            enriched from the rest), stores it, and embeds the abstract so it
+            becomes semantically searchable via find_papers.
+          - Batch: supply identifiers (a list of DOIs/arXiv IDs/titles). Each is
+            looked up and stored independently; one bad identifier does not abort
+            the rest. Returns a per-item summary.
+          - Topic: supply topic instead. Fans out all sources and returns ranked
+            candidates, storing NOTHING by default — pass store=true to bulk-store
+            them.
 
         Use ingest_document instead when you have the actual PDF/text file.
 
@@ -149,27 +156,40 @@ def register(mcp):
 
         Args:
             identifier:  DOI, arXiv ID, or title/author text for known-item lookup.
-                         DOI/arXiv preferred; title must match exactly to resolve.
+                         DOI/arXiv preferred; a title may have minor misspellings.
             identifiers: List of DOIs/arXiv IDs/titles for batch known-item lookup.
-                         Use DOIs/arXiv IDs where you have them.
-            topic:       Topic/keyword query for discovery (returns candidates only).
+            topic:       Topic/keyword query for discovery (candidates by default).
             doc_type:    Type label — paper | report | preprint | other.
             sources:     Comma-separated source override (e.g. "openalex,arxiv"),
                          otherwise uses the configured order.
+            store:       Topic mode only — bulk-store the candidates when true.
+            author:      Comma-separated author surname(s) corroborating a title.
+            year:        Publication year corroborating a title.
+            title_threshold: Override the fuzzy title match threshold (0–1).
             force:       Re-fetch and replace an existing record with the same DOI.
         """
         if not identifier and not identifiers and not topic:
             return "Supply identifier (DOI/arXiv/title), identifiers (list), or topic."
         source_order = [s.strip() for s in sources.split(",")] if sources else None
+        author_list = (
+            [a.strip() for a in author.split(",") if a.strip()] if author else None
+        )
 
-        if identifiers:
-            batch = await brain.fetch_papers(
-                identifiers=identifiers,
-                doc_type=doc_type,
-                source_order=source_order,
-                force=force,
-            )
-            s = batch["summary"]
+        result = await brain.fetch_papers(
+            identifier=identifier,
+            identifiers=identifiers,
+            topic=topic,
+            doc_type=doc_type,
+            source_order=source_order,
+            force=force,
+            store=store,
+            title_threshold=title_threshold,
+            year=year,
+            authors=author_list,
+        )
+
+        if result["mode"] == "batch":
+            s = result["summary"]
             lines = [
                 f"Batch fetch: {s['fetched']} fetched, {s['deduped']} already in "
                 f"library, {s['not_found']} not found "
@@ -180,7 +200,7 @@ def register(mcp):
                     f"{s['abstracts_deferred']} abstract(s) stored without an "
                     "embedding (model unavailable) — run backfill_embeddings later."
                 )
-            for r in batch["results"]:
+            for r in result["results"]:
                 ident = r["identifier"]
                 if not r.get("found"):
                     lines.append(f"- not found: {ident}")
@@ -197,21 +217,21 @@ def register(mcp):
                     lines.append(f"- fetched: {title} ({note})")
             return "\n".join(lines)
 
-        result = await brain.fetch_paper(
-            identifier=identifier,
-            topic=topic,
-            doc_type=doc_type,
-            source_order=source_order,
-            force=force,
-        )
-
         if result["mode"] == "topic":
             candidates = result["candidates"]
             if not candidates:
                 return f"No candidates found for topic '{topic}'."
-            lines = [
-                f"Candidates for '{topic}' (nothing stored — re-call with a DOI/title):"
-            ]
+            if result.get("stored"):
+                header = (
+                    f"Candidates for '{topic}' — stored {result['stored']} "
+                    f"of {len(candidates)}:"
+                )
+            else:
+                header = (
+                    f"Candidates for '{topic}' (nothing stored — re-call with "
+                    "store=true or a DOI/title):"
+                )
+            lines = [header]
             for c in candidates:
                 authors = c.get("authors") or []
                 author_str = " & ".join(authors[:2]) + (
@@ -424,7 +444,7 @@ def register(mcp):
 
         Args:
             doi: DOI (exact, authoritative when present).
-            title: Paper title (matched after normalization — case/punctuation/apostrophe insensitive).
+            title: Paper title (fuzzy match — tolerates case/punctuation/apostrophe and slight misspellings).
             journal: Journal/venue name or canonical abbrev.
             authors: One author or a comma-separated list (surname is enough).
             year: Publication year (exact).

@@ -16,7 +16,6 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from openbrain import acquire as acquire_mod
 from openbrain import brain
 from openbrain import findings as findings_mod
 from openbrain import sources
@@ -104,30 +103,18 @@ def _emit(data) -> None:
 
 
 @app.command()
-def acquire(
-    query: str = typer.Argument(..., help="Topic/keyword query"),
-    venue: list[str] = typer.Option(
-        None, "--venue", "-v", help="Restrict to venue abbrev(s); repeatable"
+def fetch(
+    topic: str = typer.Argument(..., help="Topic/keyword query"),
+    sources_csv: str = typer.Option(
+        None, "--sources", help="Comma-separated source override"
     ),
-    since: int = typer.Option(None, "--since", help="Minimum publication year"),
-    limit: int = typer.Option(50, "--limit", help="Max survivors to store"),
-    min_overlap: int = typer.Option(
-        2, "--min-overlap", help="Lexical recall-gate threshold"
-    ),
-    dry_run: bool = typer.Option(
-        False, "--dry-run", help="Preview only; store nothing"
-    ),
+    limit: int = typer.Option(10, "--limit", help="Max candidates"),
+    store: bool = typer.Option(False, "--store", help="Bulk-store the candidates"),
 ):
-    """Search journal sources, prefilter deterministically, and store survivors."""
+    """Fan out external sources for a topic; store the candidates with --store."""
+    order = [s.strip() for s in sources_csv.split(",")] if sources_csv else None
     report = asyncio.run(
-        acquire_mod.acquire(
-            query,
-            venues_filter=set(venue) if venue else None,
-            since=since,
-            limit=limit,
-            min_overlap=min_overlap,
-            dry_run=dry_run,
-        )
+        brain.fetch_papers(topic=topic, source_order=order, limit=limit, store=store)
     )
     _emit(report)
 
@@ -210,14 +197,18 @@ def export_bibtex(
 
 @app.command(name="search-findings")
 def search_findings(
-    text: str = typer.Option(None, "--text", help="Match either side of the causal edge"),
+    text: str = typer.Option(
+        None, "--text", help="Match either side of the causal edge"
+    ),
     cause: str = typer.Option(None, "--cause"),
     effect: str = typer.Option(None, "--effect"),
     stat: str = typer.Option(None, "--stat", help="magnitude_stat e.g. elasticity"),
     venue: str = typer.Option(None, "--venue"),
     year_min: int = typer.Option(None, "--year-min"),
     status: str = typer.Option(None, "--status"),
-    group_by: str = typer.Option(None, "--group-by", help="'paper' to collapse by source"),
+    group_by: str = typer.Option(
+        None, "--group-by", help="'paper' to collapse by source"
+    ),
     limit: int = typer.Option(50, "--limit"),
 ):
     """Search extracted findings; each row carries its source paper citation."""
@@ -269,13 +260,16 @@ def relevance(
     _emit({"cosines": cosines})
 
 
-@app.command(name="store-paper")
-def store_paper(
-    json_meta: str = typer.Option(..., "--json", help="Paper metadata as JSON"),
+@app.command(name="store-papers")
+def store_papers(
+    json_meta: str = typer.Option(
+        ..., "--json", help="Paper metadata as a JSON list (or single object)"
+    ),
 ):
-    """Store one paper's metadata; emits {id, title, deduped}."""
-    meta = json.loads(json_meta)
-    result = asyncio.run(brain.store_one(meta))
+    """Store a list of papers; emits {stored, deduped, results}."""
+    parsed = json.loads(json_meta)
+    papers = parsed if isinstance(parsed, list) else [parsed]
+    result = asyncio.run(brain.store_papers(papers))
     _emit(result)
 
 

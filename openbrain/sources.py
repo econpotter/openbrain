@@ -1,5 +1,5 @@
 """
-sources.py — pluggable external paper-metadata sources for fetch_paper.
+sources.py — pluggable external paper-metadata sources for fetch_papers.
 
 Each source exposes two functions:
 
@@ -16,6 +16,7 @@ so brain.py runs resolve() inside an executor. Configuration (which sources, in
 what order) is owned by brain.py and passed in via the `order` argument.
 """
 
+import difflib
 import json
 import os
 import re
@@ -550,6 +551,42 @@ def _normalize_title(title: str | None) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+# ---------------------------------------------------------------------------
+# Shared fuzzy reference scorer (used by BOTH get_papers and fetch_papers)
+# ---------------------------------------------------------------------------
+
+MATCH_THRESHOLD = 0.8
+
+
+def _title_similarity(a: str | None, b: str | None) -> float:
+    """0..1 ratio of two normalized titles via difflib (stdlib)."""
+    return difflib.SequenceMatcher(
+        None, _normalize_title(a), _normalize_title(b)
+    ).ratio()
+
+
+def _ref_surnames(authors) -> set[str]:
+    """Normalized author surnames from 'Last, First' or 'First Last' strings."""
+    out: set[str] = set()
+    for a in authors or []:
+        token = a.split(",")[0] if "," in a else a.split()[-1]
+        norm = _normalize_title(token)
+        if norm:
+            out.add(norm)
+    return out
+
+
+def _score_candidate(ref_title, cand: dict, *, year=None, authors=None) -> float:
+    """Title similarity plus small bonuses when a supplied year / author surname
+    corroborates. Bonuses only raise the score; they never block a strong title."""
+    score = _title_similarity(ref_title, cand.get("title"))
+    if year is not None and cand.get("year") == year:
+        score += 0.05
+    if authors and (_ref_surnames(authors) & _ref_surnames(cand.get("authors") or [])):
+        score += 0.05
+    return score
+
+
 def _dedup_key(rec: PaperMeta) -> str:
     if rec.get("doi"):
         return "doi:" + rec["doi"].lower()
@@ -579,10 +616,18 @@ def resolve(
     id_kind: str | None = None,
     order: list[str] | None = None,
     limit: int = 10,
+    min_score: float | None = None,
+    year: int | None = None,
+    authors=None,
 ) -> PaperMeta | list[PaperMeta] | None:
     """
     Known-item lookup (identifier) -> one merged PaperMeta (or None).
     Topic search (topic) -> deduplicated list[PaperMeta] ranked by source order.
+
+    Known-item resolution queries sources in order and SHORT-CIRCUITS on the
+    first whose best candidate clears the fuzzy match threshold (DOI/arXiv use
+    the exact identifier instead of scoring). The winner is then ENRICHED by its
+    DOI from the remaining sources (fills a missing abstract/bibtex/issn).
     """
     names = [n for n in (order or _DEFAULT_ORDER) if n in _REGISTRY]
 
@@ -598,19 +643,46 @@ def resolve(
 
     if identifier is not None:
         kind = id_kind or detect_identifier_kind(identifier)
-        found: list[PaperMeta] = []
-        for name in names:
-            lookup_fn, _ = _REGISTRY[name]
-            rec = lookup_fn(identifier, kind)
-            if rec and rec.get("title"):
-                found.append(rec)
-        # Title lookups are fuzzy at the source: each backend returns its nearest
-        # search hit. Require an exact (normalized) title match so a generic or
-        # partial query can't store an unrelated paper. DOI/arXiv are exact
-        # identifiers and skip the gate.
-        if kind == "title":
-            wanted = _normalize_title(identifier)
-            found = [r for r in found if _normalize_title(r.get("title")) == wanted]
-        return _merge(found) if found else None
+        threshold = MATCH_THRESHOLD if min_score is None else min_score
+
+        winner: PaperMeta | None = None
+        remaining: list[str] = []
+        for idx, name in enumerate(names):
+            lookup_fn, search_fn = _REGISTRY[name]
+            if kind == "title":
+                # Title lookups are fuzzy at the source: score each hit and keep
+                # the best only if it clears the threshold, so a generic or
+                # partial query can't resolve to an unrelated paper.
+                cands = search_fn(identifier, limit)
+                scored = [
+                    (c, _score_candidate(identifier, c, year=year, authors=authors))
+                    for c in cands
+                ]
+                if scored:
+                    best, best_score = max(scored, key=lambda t: t[1])
+                    if best_score >= threshold and best.get("title"):
+                        winner = best
+            else:  # doi / arxiv — exact identifier, no scoring
+                rec = lookup_fn(identifier, kind)
+                if rec and rec.get("title"):
+                    winner = rec
+            if winner is not None:
+                remaining = names[idx + 1 :]
+                break
+
+        if winner is None:
+            return None
+
+        # Enrich the winner from the remaining sources by its DOI (fills a missing
+        # abstract/bibtex/issn). The winner is first, so its own fields win.
+        enrich_recs: list[PaperMeta] = [winner]
+        doi = winner.get("doi")
+        if doi:
+            for name in remaining:
+                lookup_fn, _ = _REGISTRY[name]
+                extra = lookup_fn(doi, "doi")
+                if extra and extra.get("title"):
+                    enrich_recs.append(extra)
+        return _merge(enrich_recs)
 
     return None

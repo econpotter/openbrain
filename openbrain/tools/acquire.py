@@ -1,46 +1,21 @@
 """
-tools/acquire.py — MCP tools for the deterministic acquire subsystem:
-acquisition (acquire), structured query + affordances (query_library, coverage,
-list_venues, list_concepts, remove_record), and bibtex export. All return
-JSON-friendly text so an external agent drives the loop without parsing prose.
+tools/acquire.py — MCP tools for deterministic library browsing and export:
+structured query + affordances (query_library, coverage, list_venues,
+list_concepts, remove_record) and bibtex export. All return JSON-friendly text
+so an external agent drives the loop without parsing prose.
 
-The automated research agenda (which topics to harvest, on what cadence) is
-external — a driver calls `acquire` on request; openbrain owns no saved-query
-registry or scheduler.
+Bulk paper acquisition lives in fetch_papers/store_papers (tools/library.py,
+tools/driver.py); the relevance gate and research agenda are the driver's, not
+openbrain's.
 """
 
 import asyncio
 import json
 
-from openbrain import acquire as acquire_mod
 from openbrain import brain, sources
 
 
 def register(mcp):
-    @mcp.tool
-    async def acquire(
-        query: str,
-        venues: list[str] | None = None,
-        since: int | None = None,
-        limit: int = 50,
-        min_overlap: int = 2,
-        dry_run: bool = False,
-    ) -> str:
-        """Search journal sources for `query`, deterministically prefilter, and
-        store survivors into the library with embeddings (no LLM). `venues` is an
-        optional list of canonical abbrevs (e.g. ['AJAE','WRR']) pushed API-side;
-        `since` bounds publication year; `min_overlap` is the lexical recall gate.
-        dry_run=True previews counts + a sample without storing anything."""
-        report = await acquire_mod.acquire(
-            query,
-            venues_filter=set(venues) if venues else None,
-            since=since,
-            limit=limit,
-            min_overlap=min_overlap,
-            dry_run=dry_run,
-        )
-        return json.dumps(report, indent=2, default=str)
-
     @mcp.tool
     async def query_library(
         venue: str | None = None,
@@ -105,7 +80,7 @@ def register(mcp):
     @mcp.tool
     async def remove_record(query: str) -> str:
         """Delete a single library record resolved by `query` (title/author/doi).
-        Refuses when the query is ambiguous. The post-hoc prune for prefilter
+        Refuses when the query is ambiguous. The post-hoc prune for stored
         false-positives — judgment stays with the agent, execution here."""
         result = await brain.delete_library_record(query)
         return json.dumps(result, indent=2, default=str)

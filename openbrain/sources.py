@@ -538,13 +538,14 @@ _DEFAULT_ORDER = ["openalex", "crossref", "semantic_scholar", "arxiv"]
 
 
 def _normalize_title(title: str | None) -> str:
-    """Lowercase, strip accents/punctuation, normalize '&', collapse whitespace —
-    so two spellings of the same title compare equal in the exact-match gate."""
+    """Lowercase, strip accents, drop apostrophes, punctuation->space, normalize
+    '&', collapse whitespace — so spelling/punctuation noise compares equal."""
     if not title:
         return ""
     text = unicodedata.normalize("NFKD", title)
     text = "".join(c for c in text if not unicodedata.combining(c))
     text = text.lower().replace("&", " and ")
+    text = re.sub(r"['`‘’]", "", text)  # apostrophes deleted: cattlemen's -> cattlemens
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 

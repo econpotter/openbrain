@@ -21,7 +21,7 @@ raw rows.
 
 - Query names a person or project: prefer `search_by_entity`, `get_project`, or
   `get_person` for focused context.
-- "Where is document X stored?": call `get_library_record(query=<title>)`.
+- "Where is document X stored?": call `get_papers(title=<title>)`.
 
 ## Output
 

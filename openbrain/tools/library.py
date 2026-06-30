@@ -313,7 +313,7 @@ def register(mcp):
         Semantic search over the document library.
 
         Use this when the user asks about papers, reports, documentation, or
-        document text. Use get_library_record for metadata about a known record.
+        document text. Use get_papers for metadata about a known record.
 
         Returns a JSON object with `ids` (distinct library paper ids in rank
         order, top-`limit`, for the external driver) and `results` (the matching
@@ -355,26 +355,49 @@ def register(mcp):
         )
 
     @mcp.tool
-    async def get_library_record(query: str) -> str:
+    async def get_papers(
+        doi: str | None = None,
+        title: str | None = None,
+        journal: str | None = None,
+        authors: str | None = None,
+        year: int | None = None,
+    ) -> str:
         """
-        Get metadata for one library record without searching document chunks.
+        Deterministically retrieve library record(s) by bibliographic reference —
+        not by free-text search. Supply any subset of doi/title/journal/authors/
+        year; DOI matches exactly, the rest match on normalized fields together.
 
-        Use this when the user asks for a document's filepath, citation metadata,
-        DOI, status, or catalog details.
+        Use this when you know *which* paper(s) you want (you have a citation).
+        Use find_papers for "papers about X" (semantic), or search by topic.
 
         Args:
-            query: Title fragment, author name, filename slug, filepath, or DOI.
+            doi: DOI (exact, authoritative when present).
+            title: Paper title (matched after normalization — case/punctuation/apostrophe insensitive).
+            journal: Journal/venue name or canonical abbrev.
+            authors: One author or a comma-separated list (surname is enough).
+            year: Publication year (exact).
         """
-        record = await brain.get_library_record(query)
-        if record is None:
-            return f"No library record found matching '{query}'."
-        if "multiple" in record:
-            return f"Multiple matches: {', '.join(record['multiple'])}. Please be more specific."
+        author_list = (
+            [a.strip() for a in authors.split(",") if a.strip()] if authors else None
+        )
+        rows = await brain.resolve_reference(
+            doi=doi, title=title, journal=journal, authors=author_list, year=year
+        )
+        if not rows:
+            return "No library record matched the reference."
+        if len(rows) > 1:
+            lines = [f"{len(rows)} matches — disambiguate (pass a DOI or add fields):"]
+            for r in rows:
+                year_s = f" ({r['year']})" if r.get("year") else ""
+                doi_s = f" doi:{r['doi']}" if r.get("doi") else ""
+                lines.append(f"- {r['title']}{year_s}{doi_s} [{r['id']}]")
+            return "\n".join(lines)
 
+        record = rows[0]
         lines = [f"## {record['title']}"]
-        authors = record["authors"] or []
-        if authors:
-            lines.append("Authors: " + ", ".join(authors))
+        authors_out = record["authors"] or []
+        if authors_out:
+            lines.append("Authors: " + ", ".join(authors_out))
         if record["year"]:
             lines.append(f"Year: {record['year']}")
         if record["source"]:

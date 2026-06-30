@@ -1425,6 +1425,63 @@ class LibraryPathOverrideCopyTargetTest(unittest.IsolatedAsyncioTestCase):
         importlib.reload(brain)
 
 
+def _lib_row(**kw):
+    base = {
+        "id": "x", "title": "T", "authors": [], "year": None, "source": None,
+        "doc_type": "paper", "status": "ingested", "filepath": None,
+        "doi": None, "abstract": None,
+    }
+    base.update(kw)
+    return base
+
+
+class ReferenceResolveTests(unittest.IsolatedAsyncioTestCase):
+    async def test_doi_is_exact_and_authoritative(self):
+        rows = [_lib_row(id="1", title="Whatever", doi="10.1/x")]
+        conn = _FetchConnection(rows)
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
+            out = await brain.resolve_reference(doi="https://doi.org/10.1/x")
+        self.assertEqual([r["id"] for r in out], ["1"])
+        self.assertIn("doi =", conn.calls[0][0])  # took the exact-DOI branch
+
+    async def test_title_apostrophe_noise_matches(self):
+        rows = [
+            _lib_row(id="1", title="Cattlemen's Association", year=1990),
+            _lib_row(id="2", title="Unrelated Paper", year=1990),
+        ]
+        conn = _FetchConnection(rows)
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
+            out = await brain.resolve_reference(title="cattlemens association")
+        self.assertEqual([r["id"] for r in out], ["1"])
+
+    async def test_author_surname_corroboration_disambiguates(self):
+        rows = [
+            _lib_row(id="1", title="Shared Title", authors=["Jane Doe"], year=2001),
+            _lib_row(id="2", title="Shared Title", authors=["John Smith"], year=2001),
+        ]
+        conn = _FetchConnection(rows)
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
+            out = await brain.resolve_reference(title="shared title", authors=["Doe"])
+        self.assertEqual([r["id"] for r in out], ["1"])
+
+    async def test_returns_multiple_when_ambiguous(self):
+        rows = [
+            _lib_row(id="1", title="Shared Title", authors=["Jane Doe"]),
+            _lib_row(id="2", title="Shared Title", authors=["John Smith"]),
+        ]
+        conn = _FetchConnection(rows)
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
+            out = await brain.resolve_reference(title="shared title")
+        self.assertEqual({r["id"] for r in out}, {"1", "2"})
+
+    async def test_nonmatching_title_returns_empty(self):
+        rows = [_lib_row(id="1", title="Some Paper")]
+        conn = _FetchConnection(rows)
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
+            out = await brain.resolve_reference(title="a totally different title")
+        self.assertEqual(out, [])
+
+
 if __name__ == "__main__":
     unittest.main()
 

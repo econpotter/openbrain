@@ -2186,6 +2186,81 @@ async def search_findings(
     return [{"finding": _finding_block(row), "source": _finding_source(row)} for row in rows]
 
 
+_LIBRARY_COLS = (
+    "id, title, authors, year, source, doc_type, status, filepath, doi, abstract"
+)
+
+
+def _surnames(authors) -> set[str]:
+    """Lowercased, accent-stripped surnames from author strings ('Last, First'
+    or 'First Last'). Reuses _normalize_title as the per-token normalizer."""
+    if isinstance(authors, str):
+        authors = [authors]
+    out: set[str] = set()
+    for a in authors or []:
+        a = a.strip()
+        if not a:
+            continue
+        token = a.split(",")[0] if "," in a else a.split()[-1]
+        norm = sources._normalize_title(token)
+        if norm:
+            out.add(norm)
+    return out
+
+
+async def resolve_reference(
+    *,
+    doi: str | None = None,
+    title: str | None = None,
+    journal: str | None = None,
+    authors=None,
+    year: int | None = None,
+) -> list[dict]:
+    """Deterministic reference -> library rows. DOI exact when present; otherwise
+    a conjunction of normalized fields: exact-normalized title equality, plus
+    author-surname and year/journal corroboration. Returns 0, 1, or many rows;
+    the caller decides what to do with ambiguity (never auto-picks here)."""
+    pool = await get_pool()
+
+    # 1. DOI is exact and authoritative.
+    if doi:
+        norm = sources._normalize_doi(doi) or doi.strip()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"SELECT {_LIBRARY_COLS} FROM library WHERE doi = $1", norm
+            )
+        return [dict(r) for r in rows]
+
+    # 2. No DOI: coarse SQL prefilter on exact structured fields, then
+    #    normalized-equality gate in Python (mirrors sources._normalize_title).
+    clauses: list[str] = []
+    params: list = []
+    if year is not None:
+        params.append(year)
+        clauses.append(f"year = ${len(params)}")
+    if journal:
+        params.append(_source_slug(journal) or journal)
+        params.append(f"%{journal}%")
+        clauses.append(
+            f"(venue_abbrev = ${len(params) - 1} OR source ILIKE ${len(params)})"
+        )
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(f"SELECT {_LIBRARY_COLS} FROM library{where}", *params)
+    cands = [dict(r) for r in rows]
+
+    if title:
+        wanted = sources._normalize_title(title)
+        cands = [r for r in cands if sources._normalize_title(r.get("title")) == wanted]
+    if authors:
+        wanted_surnames = _surnames(authors)
+        if wanted_surnames:
+            cands = [
+                r for r in cands if wanted_surnames & _surnames(r.get("authors") or [])
+            ]
+    return cands
+
+
 async def find_library_records(query: str) -> list[dict]:
     pool = await get_pool()
     async with pool.acquire() as conn:

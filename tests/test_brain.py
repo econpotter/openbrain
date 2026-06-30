@@ -669,7 +669,7 @@ class _PaperConnection:
 
     async def fetchrow(self, query, *args):
         self.fetchrow_calls.append((query, args))
-        if "SELECT id, title FROM library WHERE doi" in query:
+        if "WHERE doi" in query or "WHERE lower(doi)" in query:
             return self.existing
         if "WHERE lower(title)" in query:
             return self.title_existing
@@ -1698,6 +1698,33 @@ class StoreAcquiredPaperTests(unittest.IsolatedAsyncioTestCase):
         conn = _PaperConnection(existing={"id": "lib-1", "title": "T"})
         with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
             res = await brain.store_acquired_paper({"doi": "10.1/x", "title": "T"})
+        self.assertTrue(res["deduped"])
+        self.assertFalse(
+            any("INSERT INTO library" in q for q, _ in conn.fetchrow_calls)
+        )
+
+    async def test_normalizes_doi_before_dedup_and_store(self):
+        conn = _PaperConnection(existing=None)
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))),
+            patch.object(brain, "embed", AsyncMock(return_value=[0.1, 0.2])),
+        ):
+            await brain.store_acquired_paper(
+                {"doi": "https://doi.org/10.1257/AER.123", "title": "T"}
+            )
+        # dedup looks up case-insensitively; the stored DOI is the bare form.
+        self.assertTrue(any("lower(doi)" in q for q, _ in conn.fetchrow_calls))
+        insert = next(
+            args for q, args in conn.fetchrow_calls if "INSERT INTO library" in q
+        )
+        self.assertEqual(insert[5], "10.1257/AER.123")  # https://doi.org/ stripped
+
+    async def test_dedups_on_title_year_when_no_doi(self):
+        conn = _PaperConnection(
+            existing=None, title_existing={"id": "lib-7", "title": "T"}
+        )
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
+            res = await brain.store_acquired_paper({"title": "T", "year": 2020})
         self.assertTrue(res["deduped"])
         self.assertFalse(
             any("INSERT INTO library" in q for q, _ in conn.fetchrow_calls)

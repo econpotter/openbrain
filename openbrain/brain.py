@@ -1734,29 +1734,44 @@ async def store_acquired_paper(meta: dict, *, force: bool = False) -> dict:
     Store a paper acquired by the deterministic acquire pipeline. Like
     _store_paper, but keeps the RAW venue name in `source` (no `_source_slug`)
     and carries the acquire columns (issn, venue_source_id, venue_abbrev,
-    concepts). Deduplicates by DOI. The abstract is embedded as a chunk through
+    concepts). Deduplicates by normalized DOI, then by title+year for DOI-less
+    papers. The abstract is embedded as a chunk through
     the existing _embed_or_none deferral path. No ingest_event thought is emitted
     — bulk acquisition would flood the append-only thought log.
 
     Returns {id, title, embedded, deduped}.
     """
     pool = await get_pool()
-    doi = meta.get("doi")
-    if doi:
-        async with pool.acquire() as conn:
+    # Normalize the DOI (strip any https://doi.org/ prefix; match case-insensitively
+    # since DOIs are case-insensitive) so 10.1/X and https://doi.org/10.1/x dedup.
+    raw_doi = meta.get("doi")
+    doi = (sources._normalize_doi(raw_doi) or raw_doi) if raw_doi else None
+    title = meta.get("title")
+    async with pool.acquire() as conn:
+        existing = None
+        if doi:
             existing = await conn.fetchrow(
-                "SELECT id, title FROM library WHERE doi = $1", doi
+                "SELECT id, title FROM library WHERE lower(doi) = lower($1)", doi
             )
-        if existing and not force:
-            return {
-                "id": str(existing["id"]),
-                "title": existing["title"],
-                "embedded": False,
-                "deduped": True,
-            }
-        if existing and force:
-            async with pool.acquire() as conn:
-                await conn.execute("DELETE FROM library WHERE id = $1", existing["id"])
+        if existing is None and title:
+            # Fallback for DOI-less (or differing-DOI) papers: same normalized
+            # title + year is the same paper, so they can't silently duplicate.
+            existing = await conn.fetchrow(
+                "SELECT id, title FROM library "
+                "WHERE lower(title) = lower($1) AND year IS NOT DISTINCT FROM $2",
+                title,
+                meta.get("year"),
+            )
+    if existing and not force:
+        return {
+            "id": str(existing["id"]),
+            "title": existing["title"],
+            "embedded": False,
+            "deduped": True,
+        }
+    if existing and force:
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM library WHERE id = $1", existing["id"])
 
     async with pool.acquire() as conn:
         row = await conn.fetchrow(

@@ -25,7 +25,7 @@ integrations/
 |---|---|---|
 | `openbrain-capture` | Persist a thought, decision, preference, or project update | Route to `remember_preference`, `capture_decision`, `capture_project_update`, or `capture_thought` by content type |
 | `openbrain-ingest` | Add a document or directory to the library | Same-host: `ingest_document` / `ingest_directory`; remote: `prepare_document_ingest` -> copy -> `ingest_staged_document`; fix metadata with `update_library` |
-| `openbrain-search` | Answer "what do I know about X?" | `search_brain`, plus `search_library`, `search_by_entity`, or `get_library_record` when useful |
+| `openbrain-search` | Answer "what do I know about X?" | `search_brain`, plus `search_library`, `search_by_entity`, or `get_papers` when useful |
 | `openbrain-briefing` | Show what's on the user's plate | `get_briefing`, plus calendar merge if available; `list_follow_ups` only for follow-up-specific or wider-window queries |
 | `openbrain-extraction` | Consolidate recent memory | `run_memory_extraction(dry_run=True)` first; apply only after exact user approval |
 

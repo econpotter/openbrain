@@ -1140,11 +1140,18 @@ class StorePapersTests(unittest.IsolatedAsyncioTestCase):
             patch.object(brain.venues, "match", AsyncMock(return_value="AJAE")),
         ):
             out = await brain.store_papers(
-                [{"title": "A", "doi": "10.1/a"}]  # no abstract -> enriched
+                # no abstract -> enriched
+                [{"title": "A", "doi": "10.1/a", "authors": ["Jane Doe"], "year": 2021}]
             )
         self.assertEqual(out["stored"], 1)
         self.assertEqual(seen[0]["abstract"], "filled")
         self.assertEqual(seen[0]["venue_abbrev"], "AJAE")
+        # Results carry the full citation, not just the uuid.
+        row = out["results"][0]
+        self.assertEqual(row["doi"], "10.1/a")
+        self.assertEqual(row["authors"], ["Jane Doe"])
+        self.assertEqual(row["year"], 2021)
+        self.assertEqual(row["venue"], "AJAE")
 
     async def test_empty_is_noop(self):
         out = await brain.store_papers([])
@@ -1829,14 +1836,26 @@ class StorePapersWrapTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(brain.venues, "match", AsyncMock(return_value=None)),
         ):
-            out = await brain.store_papers([{"title": "A Paper"}])
+            out = await brain.store_papers(
+                # abstract present -> skip the crossref enrich (no network in tests)
+                [{"title": "A Paper", "doi": "10.1/p", "year": 2019, "abstract": "x"}]
+            )
+        self.assertEqual(out["stored"], 1)
+        self.assertEqual(out["deduped"], 0)
         self.assertEqual(
-            out,
-            {
-                "stored": 1,
-                "deduped": 0,
-                "results": [{"id": "lib-9", "title": "A Paper", "deduped": False}],
-            },
+            out["results"],
+            [
+                {
+                    "id": "lib-9",
+                    "title": "A Paper",
+                    "authors": [],
+                    "year": 2019,
+                    "doi": "10.1/p",
+                    "venue": None,
+                    "bibtex": None,
+                    "deduped": False,
+                }
+            ],
         )
 
 

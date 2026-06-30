@@ -192,6 +192,21 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class NormalizeTitleTests(unittest.TestCase):
+    def test_apostrophes_are_deleted_not_spaced(self):
+        # "Cattlemen's" must equal "Cattlemens" so apostrophe noise can't block a match.
+        self.assertEqual(
+            sources._normalize_title("Cattlemen's Association"),
+            sources._normalize_title("Cattlemens Association"),
+        )
+
+    def test_still_collapses_punctuation_and_case(self):
+        self.assertEqual(
+            sources._normalize_title("  Optimal,  Bandwidth   Choice. "),
+            "optimal bandwidth choice",
+        )
+
+
 class AcquireFieldCaptureTests(unittest.TestCase):
     def test_openalex_record_captures_venue_keys_and_concepts(self):
         work = {

@@ -946,8 +946,9 @@ class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(brain, "fetch_papers", AsyncMock(return_value=result)):
             out = await mcp.tools["fetch_papers"](identifier="10.1/x")
 
-        self.assertIn("Fetched: A Paper", out)
-        self.assertIn("Abstract: stored and embedded", out)
+        payload = json.loads(out)
+        self.assertEqual(payload["title"], "A Paper")
+        self.assertTrue(payload["embedded"])
 
     async def test_store_paper_defers_embedding_when_model_unavailable(self):
         connection = _PaperConnection(existing=None)
@@ -985,7 +986,9 @@ class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(brain, "fetch_papers", AsyncMock(return_value=result)):
             out = await mcp.tools["fetch_papers"](identifier="10.1/x")
 
-        self.assertIn("embedding deferred", out)
+        payload = json.loads(out)
+        self.assertTrue(payload["abstract_stored"])
+        self.assertFalse(payload["embedded"])
 
     async def test_fetch_papers_processes_each_identifier_independently(self):
         outcomes = {
@@ -1047,9 +1050,12 @@ class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(brain, "fetch_papers", AsyncMock(return_value=batch)):
             out = await mcp.tools["fetch_papers"](identifiers=["10.1/a", "10.1/c"])
 
-        self.assertIn("1 fetched", out)
-        self.assertIn("fetched: A", out)
-        self.assertIn("not found: 10.1/c", out)
+        payload = json.loads(out)
+        self.assertEqual(payload["mode"], "batch")
+        self.assertEqual(payload["summary"]["fetched"], 1)
+        self.assertEqual(payload["summary"]["not_found"], 1)
+        self.assertEqual([r["identifier"] for r in payload["results"]],
+                         ["10.1/a", "10.1/c"])
 
     async def test_backfill_embeds_null_chunks_and_counts(self):
         connection = _BackfillConnection(

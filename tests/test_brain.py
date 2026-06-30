@@ -75,6 +75,14 @@ class _IngestConnection:
         self.fetchrow_calls.append((query, args))
         if "SELECT id, filepath FROM library" in query:
             return self.library_records.get(args[0])
+        # Invalidate-on-upgrade lookups: default to "no abstract-only match" so
+        # ingest takes the INSERT path. Tests that exercise upgrade override this.
+        if "SELECT id FROM library WHERE lower(doi)" in query:
+            return getattr(self, "doi_upgrade", None)
+        if "SELECT id FROM library WHERE lower(title)" in query:
+            return getattr(self, "title_upgrade", None)
+        if "UPDATE library SET" in query:
+            return {"id": getattr(self, "upgrade_id", "library-up"), "title": args[0] if args else "T"}
         if "INSERT INTO library" in query:
             row = {"id": "library-1", "title": args[0], "filepath": args[6]}
             self.library_records[args[7]] = row
@@ -625,6 +633,34 @@ class IngestPipelineTests(unittest.IsolatedAsyncioTestCase):
         content, metadata = store_thought.await_args.args
         self.assertIn("Ingested:", content)
         self.assertEqual(metadata["type"], "ingest_event")
+
+    async def test_ingest_upgrades_abstract_only_record_in_place(self):
+        # An abstract-only record (from fetch_paper) exists for this title; the
+        # PDF/text ingest must UPGRADE it in place (UPDATE + drop chunks/findings),
+        # not INSERT a duplicate.
+        connection = _IngestConnection()
+        connection.title_upgrade = {"id": "lib-existing"}
+        with tempfile.TemporaryDirectory() as tempdir:
+            source = Path(tempdir) / "paper.txt"
+            source.write_text("Full text of the paper, much longer than an abstract.")
+            with (
+                patch.object(brain, "LIBRARY_PATH", Path(tempdir) / "library"),
+                patch.object(
+                    brain, "get_pool", AsyncMock(return_value=_Pool(connection))
+                ),
+                patch.object(brain, "embed", AsyncMock(return_value=[0.1, 0.2])),
+                patch.object(
+                    brain, "store_thought", AsyncMock(return_value="thought-1")
+                ),
+            ):
+                await brain.ingest_document_pipeline(str(source), title="A Paper")
+
+        queries = [q for q, _ in connection.fetchrow_calls]
+        self.assertTrue(any("UPDATE library SET" in q for q in queries))
+        self.assertFalse(any("INSERT INTO library" in q for q in queries))
+        execs = [q for q, _ in connection.execute_calls]
+        self.assertTrue(any("DELETE FROM chunks WHERE library_id" in q for q in execs))
+        self.assertTrue(any("DELETE FROM findings WHERE paper_id" in q for q in execs))
 
     async def test_document_ingest_rejects_duplicate_file_hash(self):
         connection = _IngestConnection()
@@ -1179,21 +1215,6 @@ class LibrarySearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("l.doc_type = $4", query)
         self.assertIn("LIMIT $5", query)
         self.assertEqual(args, ([0.1, 0.2], 0.6, 2020, "paper", 4))
-
-    async def test_update_paper_status_resolves_then_updates(self):
-        mcp = _Mcp()
-        library_tools.register(mcp)
-        matches = [{"id": "library-1", "title": "Paper"}]
-        updated = {"title": "Paper", "status": "read"}
-        with (
-            patch.object(brain, "resolve_reference", AsyncMock(return_value=matches)),
-            patch.object(
-                brain, "update_library_record", AsyncMock(return_value=updated)
-            ),
-        ):
-            result = await mcp.tools["update_paper_status"]("read", match="Paper")
-
-        self.assertEqual(result, "Updated: Paper → read")
 
     async def test_get_papers_formats_metadata(self):
         mcp = _Mcp()

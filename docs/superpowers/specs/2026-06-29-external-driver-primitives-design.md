@@ -1,93 +1,77 @@
-# openbrain — External-Driver Primitives Design
+> **SUPERSEDED (2026-06-30)** by `2026-06-30-library-api-three-jobs.md`.
+> That doc reframes this: the library does three jobs (fetch/get/find), each with a
+> match mechanism that already exists — the work is naming, boundaries, and a cleaner
+> derivation-state model, not the unified fuzzy matcher proposed below. Kept for
+> history.
 
-Date: 2026-06-29
-Status: design approved, pre-implementation
-Consumer: the `agentic-researcher` driver (a separate orchestra project) that grows
-and expands a paper library on top of openbrain. openbrain owns the library,
-retrieval, sources, and embeddings; it owns **no agenda** (issue #004). These are the
-deterministic, parameterized primitives the driver needs so the agenda (which fronts,
-when, what radius/budget) can live entirely in the driver.
+# Problem: robust bibliographic-reference query interface for openbrain
 
-Two phases, shipped as two orchestra issues:
-- **Phase A** — `acquire` returns the stored paper IDs. Tiny; unblocks the driver's
-  per-front membership tracking. Independent of B.
-- **Phase B** — citation-neighbor fetch, anchor-relative relevance scoring, single-paper
-  store, and a `search-library` CLI. The primitives behind the driver's citation walk
-  and library-label fronts.
+## Goal
 
-## Principles
+Standardize the query/matching interface on openbrain's existing functions so a
+caller specifies *which paper(s)* using a **bibliographic reference** — not an
+internal id — matched robustly.
 
-- **No new agenda in openbrain.** Radius, anchors, budget, hop-depth, visited-set are
-  the driver's; these primitives take policy as parameters, exactly as
-  `acquire(query, min_overlap=…)` already does. No walk, no gate, no scheduler here.
-- **Deterministic, no LLM.** `relevance` uses the existing `brain.embed`; cosine is
-  arithmetic. No generation anywhere.
-- **Embeddings stay inside openbrain.** The driver never receives raw vectors —
-  `relevance` returns cosines. (Don't add a "get embedding by id" surface; it isn't
-  needed and would leak vectors across the boundary.)
-- **Reuse existing machinery:** `sources._openalex_record`, `brain.embed`,
-  `brain.store_acquired_paper`, `query_library`/`search_library`. No new deps —
-  cosine via stdlib `math`.
-- **Tests stay offline** (the project convention): mocked asyncpg pool, monkeypatched
-  HTTP and embeddings, no live network/DB. `ruff` clean. JSON CLI output via `_emit`.
+A reference is any subset of: `doi`, `title`, `journal`, `issue`, `year`, `authors`.
 
----
+Matching rules:
+- **DOI preferred** — if present, exact lookup.
+- **No DOI** — match on `title` + `journal` + `issue` + `year` + `authors` together.
+- **Robust to title noise** — misspellings, apostrophes, hyphens. The structured
+  fields (author/year/journal) corroborate a fuzzy title hit so it doesn't resolve
+  to the wrong paper.
 
-## Phase A — `acquire` returns `stored_ids`
+Applies to two existing families of functions (infrastructure already exists — this
+is about their input contract, not new machinery):
 
-`acquire`'s report currently carries counts (`found`, `deduped`, `stored`, `sample`)
-but no IDs, so an external driver cannot tell *which* papers landed. `store_acquired_paper`
-already `RETURNING id, title`; capture and surface them.
+**1. External-fetch functions** (query outside sources — OpenAlex/Crossref/S2 — AND
+save to the openbrain db):
+- `fetch_paper` (`tools/library.py`)
+- `acquire` (`tools/acquire.py`)
+- `get_citations`, `store_paper` (`tools/driver.py`)
 
-- In `openbrain/acquire.py`: accumulate `stored_ids: list[str]` in the store loop —
-  append the returned id wherever `stored` is incremented (the not-deduped branch).
-- Add `"stored_ids": stored_ids` to the returned report dict.
-- The `acquire` CLI already `_emit`s the whole report, so `stored_ids` flows out for free.
+**2. Internal-db-query functions** (query the openbrain library itself):
+- `search_library`, `get_library_record`, `update_library`, `update_library_status`,
+  `update_status` (`tools/library.py`)
+- `query_library`, `remove_record`, `export_bibtex` (`tools/acquire.py`)
 
-**Acceptance:**
-- `acquire(...)` report includes `stored_ids`, in store order, one id per newly stored
-  paper (deduped papers not included).
-- Existing acquire behavior/counts unchanged.
-- Offline test asserts `stored_ids` matches the mocked store returns; suite + ruff green.
+Both families should accept the same reference and match the same robust way.
 
----
+## Out of scope
 
-## Phase B — citation neighbors, relevance, store-one, search-library
+Functions that find **related** papers (citation walk, relevance scoring —
+`score_relevance`, the agentic-researcher driver-side `expand`) can key on whatever
+internal id is convenient (uuid, OpenAlex W-id). Robustness only matters at the
+**reference → paper** boundary, not in relation traversal.
 
-Exact shapes may be adjusted to openbrain conventions during implementation; the
-behavior and CLI contract below are the requirement.
+## Current behavior / what's wrong
 
-### B1. `sources.openalex_citation_neighbors(openalex_id: str) -> list[PaperMeta]`
-One OpenAlex `works/{id}` fetch: read `referenced_works` (outbound edges) and follow
-`cited_by_api_url` (inbound, first page). Return de-duplicated `PaperMeta` (the existing
-TypedDict: id/title/abstract/doi/year/…) via `_openalex_record`. Network-touching code
-is monkeypatched in tests (fixture work with `referenced_works` + a `cited_by` page).
+- Several functions take a single `query` string or single `identifier`, not a
+  structured reference. `remove_record(query)`, `get_library_record(query)`,
+  `search_library(query)` resolve via `title/doi/author ILIKE %query%`.
+- `fetch_paper`'s title resolution (`sources.py` `resolve()`, ~line 608) uses an
+  **exact normalized-title equality gate** (`_normalize_title`): lowercase, strip
+  accents, punctuation→space, collapse whitespace. Too strict for the goal:
+  punctuation→space makes `"Cattlemen's"` != `"Cattlemens"`, tolerates no
+  misspellings, and ignores author/year/journal as corroborating signal.
+- `get_citations(paper_id)` requires an **OpenAlex W-id** specifically — not
+  reference-based, and OpenAlex-bound.
 
-### B2. `brain.relevance(anchor_ids: list[str], candidate_texts: list[str]) -> list[float]`
-Centroid = component-wise mean of the stored embeddings for `anchor_ids` (read from the
-library table; skip ids lacking an embedding). Embed each candidate text via
-`brain.embed`. Return `cosine(centroid, candidate)` per text, order preserved. Empty
-`anchor_ids` or an all-empty centroid → raise `ValueError` (the driver's walk requires
-anchors). Cosine via stdlib `math`.
+## Key files
 
-### B3. `brain.store_one(meta: dict) -> dict`
-Thin wrapper over `store_acquired_paper(meta)`; returns `{"id", "title", "deduped"}`.
+- `openbrain/sources.py` — external source lookups + `resolve()` + `_normalize_title`
+  (the matching gate, ~line 540 / ~608).
+- `openbrain/brain.py` — `fetch_paper`/`fetch_papers` (~1870/1907); library helpers
+  `find_library_records` (~2189), `query_library_struct` (~2513),
+  `delete_library_record` (~2642).
+- `openbrain/tools/{library,acquire,driver}.py` — the MCP tool wrappers above.
 
-### B4. CLI commands (all `_emit` JSON)
-- `citations <openalex_id>` → `{"neighbors": [PaperMeta, …]}`
-- `relevance --anchor <id> [--anchor <id> …] --text <t> [--text <t> …]` → `{"cosines": [float, …]}` (order matches `--text`)
-- `store-paper --json '<meta>'` → `{"id", "title", "deduped"}`
-- `search-library <query> --limit K` → `{"ids": [paper_id, …]}` (top-K semantic hits, ids only) over the existing `search_library`
+## Context notes
 
-**Acceptance:**
-- B1–B4 implemented with the signatures/CLI contract above; reuse `_openalex_record`,
-  `brain.embed`, `store_acquired_paper`, existing `search_library`.
-- `relevance([], …)` raises `ValueError`; `relevance` returns one cosine per text in order.
-- `citations` de-duplicates references ∩ citing-works.
-- Offline tests (mocked pool, monkeypatched HTTP + embeddings) cover each; no live
-  network. Full suite + ruff green.
-
-## Non-goals
-- No citation walk, relevance gate, frontier/visited/budget logic — those are the driver's.
-- No raw-embedding export, no batch embedding API beyond `relevance`.
-- No changes to the acquire agenda (openbrain still owns no saved-query/scheduler).
+- Library DOI coverage is ~98% (542/550 rows); title-only matching is the ~2% tail
+  plus any external-source title lookups.
+- The agentic-researcher driver (separate repo) consumes these via an MCP client
+  (`src/researcher/openbrain.py`). Its citation-walk (`expand.py`) currently passes
+  library uuids to `get_citations`, which expects OpenAlex W-ids → returns nothing.
+  That is the "related papers" layer (out of scope above) but explains why the id
+  contract surfaced.

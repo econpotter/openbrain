@@ -661,8 +661,9 @@ class IngestPipelineTests(unittest.IsolatedAsyncioTestCase):
 
 
 class _PaperConnection:
-    def __init__(self, existing=None):
+    def __init__(self, existing=None, title_existing=None):
         self.existing = existing
+        self.title_existing = title_existing
         self.fetchrow_calls = []
         self.execute_calls = []
 
@@ -670,6 +671,8 @@ class _PaperConnection:
         self.fetchrow_calls.append((query, args))
         if "SELECT id, title FROM library WHERE doi" in query:
             return self.existing
+        if "WHERE lower(title)" in query:
+            return self.title_existing
         if "INSERT INTO library" in query:
             return {"id": "library-9", "title": args[0]}
         raise AssertionError(f"Unexpected query: {query}")
@@ -813,6 +816,45 @@ class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["deduped"])
         self.assertFalse(result["abstract_stored"])
         self.assertFalse(
+            any("INSERT INTO library" in q for q, _ in connection.fetchrow_calls)
+        )
+
+    async def test_store_paper_dedups_on_title_year_when_no_doi(self):
+        # A paper fetched by title may carry a different or no DOI, so a DOI-only
+        # check misses it. Match on case-insensitive title + year instead.
+        connection = _PaperConnection(
+            existing=None,
+            title_existing={"id": "library-7", "title": "A Paper"},
+        )
+        meta = {"title": "A Paper", "year": 2024}  # no doi
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(brain, "embed", AsyncMock(return_value=[0.1, 0.2])),
+            patch.object(brain, "store_thought", AsyncMock()),
+        ):
+            result = await brain._store_paper(meta)
+
+        self.assertTrue(result["deduped"])
+        self.assertEqual(result["id"], "library-7")
+        self.assertFalse(
+            any("INSERT INTO library" in q for q, _ in connection.fetchrow_calls)
+        )
+
+    async def test_store_paper_title_dedup_skipped_with_force(self):
+        connection = _PaperConnection(
+            existing=None,
+            title_existing={"id": "library-7", "title": "A Paper"},
+        )
+        meta = {"title": "A Paper", "year": 2024}
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(brain, "embed", AsyncMock(return_value=[0.1, 0.2])),
+            patch.object(brain, "store_thought", AsyncMock()),
+        ):
+            result = await brain._store_paper(meta, force=True)
+
+        self.assertFalse(result["deduped"])
+        self.assertTrue(
             any("INSERT INTO library" in q for q, _ in connection.fetchrow_calls)
         )
 
@@ -978,6 +1020,27 @@ class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["failed"], 0)
         self.assertEqual(result["pending_after"], 0)
         self.assertEqual(len(connection.updates), 2)
+
+    async def test_list_pending_embeddings_returns_records(self):
+        connection = _BackfillConnection(
+            pending=0,
+            rows=[
+                {"id": "lib-1", "title": "Paper A", "pending": 2},
+                {"id": "lib-2", "title": "Paper B", "pending": 1},
+            ],
+        )
+        with patch.object(
+            brain, "get_pool", AsyncMock(return_value=_Pool(connection))
+        ):
+            result = await brain.list_pending_embeddings()
+
+        self.assertEqual(
+            result,
+            [
+                {"id": "lib-1", "title": "Paper A", "pending": 2},
+                {"id": "lib-2", "title": "Paper B", "pending": 1},
+            ],
+        )
 
     async def test_backfill_skips_chunks_that_fail_to_embed(self):
         connection = _BackfillConnection(

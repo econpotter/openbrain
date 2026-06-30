@@ -2,9 +2,18 @@
 
 ## Document ingest fails in container: `[Errno 13] Permission denied: '/mnt/data'`
 
-**Status:** Open
+**Status:** Fixed in code (commit `e3e7030`, issue #001) — redeploy required. The
+deployed container reported here ran an image built before the fix.
 **Reported:** 2026-06-27
 **Severity:** High — full-text PDF ingest is broken on the deployed (rhythm) container. Only `fetch_paper` (metadata + abstract, no file) works.
+
+### Resolution
+
+`brain.py` reads `OPENBRAIN_LIBRARY_PATH` (container path) and the `Dockerfile`
+sets it to `/data/openbrain/library`. Rebuild + redeploy the rhythm container
+from the current image to pick up the fix. **Still open:** the remote-ingest
+staging dir (`/tmp/openbrain-ingest`) is container-internal and unreachable by
+remote scp — bind-mount it to a host path or document a host-reachable location.
 
 ### Symptom
 
@@ -102,9 +111,18 @@ stored as `fetched` with full confidence:
 
 ## `fetch_paper` dedups on DOI only → duplicate records for the same paper
 
-**Status:** Open
+**Status:** Fixed — `_store_paper` now also dedups on title + year when the DOI
+check misses.
 **Reported:** 2026-06-29
 **Severity:** Low.
+
+### Fix
+
+`brain._store_paper` runs a secondary dedup before insert: when no existing row
+matched on DOI, it looks up `lower(title) = lower($title) AND year = $year`. A
+title-sourced copy carrying a different or no DOI is now recognized as a
+duplicate. Skipped under `force=True`. The bulk `store_acquired_paper` path is
+intentionally left DOI-keyed (high-volume acquire; no title fallback).
 
 ### Symptom
 
@@ -121,7 +139,9 @@ a DOI entry and a title entry for it.
 
 ## `fetch_paper` returns a prose summary, not JSON (client integration note)
 
-**Status:** Documented (client-side worked around)
+**Status:** Documented — `fetch_paper` docstring now states the result is
+plain-text, not JSON (don't `json.loads` it). Kept prose by design; full JSON
+return deferred unless a client needs it.
 **Reported:** 2026-06-29
 **Severity:** Low — affects MCP clients that assume JSON tool results.
 
@@ -141,9 +161,19 @@ completes; only the client's response parsing fails.
 
 ## Embedding model unavailable at fetch time leaves chunks unembedded; backfill can't recover
 
-**Status:** Open
+**Status:** Partially addressed — added a tool to name the pending records; the
+underlying recovery still requires the embed model to be back up (ops).
 **Reported:** 2026-06-29
 **Severity:** Medium — affected papers are invisible to semantic `search_library` until re-embedded.
+
+### What changed
+
+Not a code defect in `backfill_embeddings` — it correctly heals chunks only when
+the embed model is reachable (`0 embedded, 3 failed` = model still down). Added
+`list_pending_embeddings` (MCP tool + `brain.list_pending_embeddings`) so the
+*which* records are pending (id + title + chunk count) is visible, not just a
+count. Recovery action: confirm the embed model is healthy on the rhythm
+container, then run `backfill_embeddings`.
 
 ### Symptom
 

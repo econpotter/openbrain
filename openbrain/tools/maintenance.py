@@ -74,6 +74,27 @@ def register(mcp):
         )
 
     @mcp.tool
+    async def list_pending_embeddings(limit: int = 100) -> str:
+        """
+        List library records that still have chunks without an embedding (stored
+        text, embedding deferred because the model was down at fetch/ingest time).
+
+        Use this to see *which* papers are unsearchable, not just how many. Run
+        backfill_embeddings once the embedding model is back up to fix them.
+
+        Args:
+            limit: Maximum number of records to list.
+        """
+        records = await brain.list_pending_embeddings(limit=limit)
+        if not records:
+            return "No records pending embedding."
+        lines = [f"{len(records)} record(s) pending embedding:"]
+        lines.extend(
+            f"- {r['title']} ({r['pending']} chunk(s)) [{r['id']}]" for r in records
+        )
+        return "\n".join(lines)
+
+    @mcp.tool
     async def backfill_links(limit: int = 1000) -> str:
         """
         Populate the `links` graph table for thoughts that mention people or

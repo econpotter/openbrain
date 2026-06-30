@@ -144,6 +144,9 @@ def register(mcp):
 
         Use ingest_document instead when you have the actual PDF/text file.
 
+        Returns a human-readable plain-text summary (not JSON) — do not json.loads
+        the result.
+
         Args:
             identifier:  DOI, arXiv ID, or title/author text for known-item lookup.
                          DOI/arXiv preferred; title must match exactly to resolve.

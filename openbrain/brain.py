@@ -1640,6 +1640,28 @@ async def _store_paper(
             async with pool.acquire() as conn:
                 await conn.execute("DELETE FROM library WHERE id = $1", existing["id"])
 
+    # Secondary dedup: the same paper fetched by title may carry a different DOI
+    # or none at all, so the DOI check above misses it. Match on case-insensitive
+    # title + year before inserting. Skipped under force (caller wants a rewrite).
+    title = meta.get("title")
+    if not force and title:
+        async with pool.acquire() as conn:
+            title_dup = await conn.fetchrow(
+                "SELECT id, title FROM library "
+                "WHERE lower(title) = lower($1) AND year IS NOT DISTINCT FROM $2",
+                title,
+                meta.get("year"),
+            )
+        if title_dup:
+            return {
+                "id": str(title_dup["id"]),
+                "title": title_dup["title"],
+                "doi": doi,
+                "abstract_stored": False,
+                "embedded": False,
+                "deduped": True,
+            }
+
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -1947,6 +1969,27 @@ async def count_pending_embeddings() -> dict:
         )
     by_kind = {row["kind"]: row["n"] for row in rows}
     return {"pending": sum(by_kind.values()), "by_kind": by_kind}
+
+
+async def list_pending_embeddings(limit: int = 100) -> list[dict]:
+    """List the library records that still have chunks without an embedding, so a
+    pending paper can be named (not just counted) once the embed model is back.
+
+    Returns one row per library record: {id, title, pending} ordered by title.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT l.id, l.title, count(*) AS pending "
+            "FROM chunks c JOIN library l ON l.id = c.library_id "
+            "WHERE c.embedding IS NULL "
+            "GROUP BY l.id, l.title ORDER BY l.title LIMIT $1",
+            limit,
+        )
+    return [
+        {"id": str(r["id"]), "title": r["title"], "pending": r["pending"]}
+        for r in rows
+    ]
 
 
 async def backfill_chunk_embeddings(limit: int = 500) -> dict:

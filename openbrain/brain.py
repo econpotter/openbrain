@@ -1987,8 +1987,7 @@ async def list_pending_embeddings(limit: int = 100) -> list[dict]:
             limit,
         )
     return [
-        {"id": str(r["id"]), "title": r["title"], "pending": r["pending"]}
-        for r in rows
+        {"id": str(r["id"]), "title": r["title"], "pending": r["pending"]} for r in rows
     ]
 
 

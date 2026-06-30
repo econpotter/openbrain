@@ -1029,9 +1029,7 @@ class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
                 {"id": "lib-2", "title": "Paper B", "pending": 1},
             ],
         )
-        with patch.object(
-            brain, "get_pool", AsyncMock(return_value=_Pool(connection))
-        ):
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))):
             result = await brain.list_pending_embeddings()
 
         self.assertEqual(

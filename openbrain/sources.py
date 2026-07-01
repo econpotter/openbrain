@@ -403,10 +403,25 @@ def _crossref_bibtex(doi: str) -> str | None:
     )
 
 
+# Crossref polite pool (mailto) + optional paid Crossref Plus token (header).
+_CROSSREF_MAILTO = urllib.parse.quote(
+    os.environ.get("CROSSREF_MAILTO", "open-brain@localhost")
+)
+
+
+def _crossref_headers() -> dict:
+    token = os.environ.get("CROSSREF_PLUS_TOKEN")
+    return {"Crossref-Plus-API-Token": f"Bearer {token}"} if token else {}
+
+
 def crossref_lookup(identifier: str, id_kind: str) -> PaperMeta | None:
     if id_kind == "doi":
         doi = _normalize_doi(identifier)
-        data = _get_json(f"https://api.crossref.org/works/{urllib.parse.quote(doi)}")
+        data = _get_json(
+            f"https://api.crossref.org/works/{urllib.parse.quote(doi)}"
+            f"?mailto={_CROSSREF_MAILTO}",
+            headers=_crossref_headers(),
+        )
         if not data:
             return None
         rec = _crossref_record(data["message"])
@@ -420,7 +435,11 @@ def crossref_lookup(identifier: str, id_kind: str) -> PaperMeta | None:
 
 def crossref_search(query: str, limit: int = 10) -> list[PaperMeta]:
     q = urllib.parse.quote(query)
-    data = _get_json(f"https://api.crossref.org/works?query={q}&rows={limit}")
+    data = _get_json(
+        f"https://api.crossref.org/works?query={q}&rows={limit}"
+        f"&mailto={_CROSSREF_MAILTO}",
+        headers=_crossref_headers(),
+    )
     if not data:
         return []
     return [_crossref_record(item) for item in data["message"].get("items", [])]

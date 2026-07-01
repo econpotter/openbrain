@@ -1,103 +1,120 @@
-# Plan G: Auto-capture session summaries via a Claude Code Stop hook
+# Plan G: Auto-capture session summaries on Stop **and** compaction
 
 ## Goal
 
-End a Claude Code session and a durable summary lands in openbrain **without the
-user saying "remember this"** and without interrupting mid-work. The trigger is
-dumb: it hands raw session text to `capture_thought`. All derivation
-(metadata extraction, embedding, entity links) is the write path's job — see
-**Plan F**, which this plan depends on.
+A durable summary lands in openbrain **without the user saying "remember this"** —
+both when a Claude Code session ends *and* every time context is compacted (auto
+or manual). Compaction is where context is actually dropped, and a long session
+compacts several times before it ever stops, so covering only Stop loses most of
+the material. The trigger is dumb: it hands transcript text to openbrain; all
+derivation (metadata extraction, embedding, entity links) is the write path's job
+— see **Plan F**, which this plan depends on.
 
-This is the concrete near-term slice of the broader **Plan D** (Auto-Capture
-Protocol). Plan D covers every surface (Codex, Claude.ai, custom harness); this
-plan ships the one that pays off first: Claude Code's `Stop` hook.
+Concrete near-term slice of the broader **Plan D** (Auto-Capture Protocol).
 
 ## Dependency
 
-**Requires Plan F.** Without server-side extraction, an automated capture that
-supplies only `content` would land with empty metadata and (on any embed hiccup)
-no searchable embedding. Plan F makes a bare `capture_thought(content=...)`
-self-sufficient. Land F first.
+**Requires Plan F (#010).** A bare `capture_thought(content=...)` must be
+self-sufficient — F adds the server-side extraction + straggler backstop that
+enriches a raw capture. Land F first.
 
 ---
 
-## Why a hook, not an instruction
+## Why not "the same Stop hook, also on PreCompact"
 
-A shell hook can't summarize — it sees tool I/O, not reasoning. But the Claude
-Code `Stop` hook payload carries `transcript_path` and re-enters the agent, so
-the *agent* can produce the summary and call the MCP tool. The prior abandoned
-experiment (a PostToolUse Bash hook appending raw shell commands to
-`.openbrain-queue.jsonl`) captured the wrong thing and never drained — do not
-revive that shape.
+Verified against the Claude Code hook docs (code.claude.com/docs/en/hooks):
 
-Two layers, both cheap:
+- **Stop** supports `decision:"block"`, which re-prompts the agent — so a Stop
+  hook *can* make the live agent summarize itself and call the MCP tool.
+- **PreCompact** supports `decision:"block"` too, but it is a **veto only**: it
+  does not re-prompt the agent or inject context. The "live agent summarizes
+  itself" mechanism **cannot run on PreCompact**.
 
-1. **Instruction (soft, ship immediately):** one sentence in global
-   `~/.claude/CLAUDE.md` — "At session end, capture a one-paragraph summary of
-   durable decisions, project updates, and follow-ups via the openbrain-capture
-   skill; skip routine/no-op sessions." Harmless, covers sessions before/without
-   the hook. (This is the user's approved "#3".)
-2. **Stop hook (reliable):** a `Stop` hook in `~/.claude/settings.json` that
-   re-enters the agent with a teardown prompt: summarize the session and call
-   `capture_thought(content=<summary>, type="conversation", source="claude")`,
-   with no metadata (the server extracts). Skip if the session produced nothing
-   durable.
+Both events expose `transcript_path`. So a unified trigger must **not** rely on
+the agent re-entry trick. Move summarization out of the in-session agent into a
+single command driven by the transcript. Same command on both events → genuinely
+identical behavior, plus determinism and reuse outside Claude Code.
+
+The prior abandoned experiment (PostToolUse Bash hook appending raw shell
+commands to `.openbrain-queue.jsonl`, never drained) is the wrong shape — do not
+revive it.
 
 ---
 
 ## Design
 
-### 1. Instruction text
+### 1. openbrain CLI: `capture-transcript` (the deliverable)
 
-Reuse `docs/agent-instructions/auto-capture.md` (already exists, Plan D). Trim to
-the teardown rule for the one-sentence global include. Source of truth stays in
-the repo; installation is a copy into `~/.claude/CLAUDE.md` (and, per Plan D,
-other surfaces later).
+Add a subcommand parallel to the PDF ingest path (`python -m openbrain.cli`):
 
-### 2. Stop hook
+    python -m openbrain.cli capture-transcript <transcript_path> \
+        --session <session_id> --trigger <stop|auto|manual>
 
-- Add a `Stop` entry to `~/.claude/settings.json` (dotfiles repo) whose prompt
-  instructs the teardown capture. Model: `docs/hooks/claude-code-hooks.json`
-  (exists, Plan D) — verify the current Claude Code hook schema/payload before
-  install; do not install blind.
-- The hook must re-enter with the openbrain MCP server connected (the capture
-  skill already stops with a clear message if it isn't).
-- **Idempotency / no double-capture:** the `capture_thought` write path already
-  dedups on `content_fingerprint` (upsert merges), so a re-fired teardown on the
-  same summary merges rather than duplicates. Rely on that; don't build a second
-  guard.
-- **No mid-work interruption:** `Stop` fires at session end only. Do not add
-  PostToolUse/PreToolUse capture hooks — that was the failed experiment.
+Behavior:
+- Read the transcript JSONL **delta** since this session's watermark (see §3).
+- Summarize the delta with openbrain's **existing `extraction:` model**
+  (`brain.complete_extraction_prompt` / the deepseek-v4-flash + gemini block).
+  **Do not** shell out to a nested `claude` — that would recurse (a launched
+  `claude` ends → fires its own Stop hook → captures again). Keep summarization
+  inside openbrain's configured model.
+- Call `capture_thought(content=<summary>, type="conversation", source="claude")`
+  with no curated metadata — Plan F's write path extracts/embeds/links it.
+- Advance the watermark.
+- Skip (no capture) when the delta is trivial/no-op.
 
-### 3. Session-start recall (optional, same hook family)
+### 2. Hook wiring (dotfiles `~/.claude/settings.json`)
 
-Per Plan D, a `SessionStart` hook can remind the agent to `search_brain` for
-context on substantial tasks. Include it if cheap; it's not required for the
-capture goal and can be a follow-up.
+One-line command hook body, wired to **both** events:
+
+| Event | Matcher | Body |
+|-------|---------|------|
+| `Stop` | (none — fires every turn end) | `capture-transcript … --trigger stop` |
+| `PreCompact` | `auto` and `manual` | `capture-transcript … --trigger <auto\|manual>` |
+
+Verify the current hook schema/payload before install; `docs/hooks/` (Plan D)
+holds copyable templates. The hook passes `transcript_path` / `session_id` from
+the event JSON on stdin.
+
+### 3. Per-session watermark (prevents overlap across compactions)
+
+A long session fires PreCompact several times then Stop once. Without a
+watermark, each fire would re-summarize the whole session. Track the last-captured
+transcript offset per `session_id` in a small state file (e.g.
+`~/.claude/.openbrain-capture-state.json`). Each fire summarizes only lines past
+the watermark and advances it. Server-side `content_fingerprint` dedup (upsert
+merge) is the backstop; the watermark is the primary guard.
+
+### 4. Instruction fallback (the approved "#3")
+
+One sentence in global `~/.claude/CLAUDE.md`: "At session end, capture a
+one-paragraph summary of durable decisions, project updates, and follow-ups via
+the openbrain-capture skill; skip routine sessions." Self-contained; covers
+sessions before/without the hook. Trim from `docs/agent-instructions/auto-capture.md`.
 
 ---
 
 ## Out of scope
 
-- The write-path derivation pipeline — **Plan F**.
-- Non-Claude-Code surfaces (Codex global, Claude.ai) — **Plan D** tracks those.
-- Adaptive capture classification / confirmation loop — Plan D Step 4, deferred.
+- Write-path derivation — **Plan F (#010)**.
+- Non-Claude-Code surfaces (Codex, Claude.ai) — **Plan D**.
+- Adaptive capture classification — Plan D Step 4, deferred.
 
 ---
 
 ## Acceptance criteria
 
-1. A substantive Claude Code session, ended normally, produces a searchable
-   openbrain thought summarizing it — **without** the user issuing any capture
-   phrase — verified by searching the brain after a real test session.
-2. That auto-captured thought, having been stored with only `content`, is fully
-   enriched (metadata + embedding + links) by the Plan F write path — confirming
-   the two plans compose.
-3. A trivial/no-op session does **not** create a junk capture (the teardown
-   prompt's skip condition works).
-4. Re-firing teardown on the same session does not create a duplicate thought
-   (fingerprint dedup).
-5. The Stop hook fires only at session end; no mid-session capture hooks are
-   installed.
-6. The one-sentence global instruction is installed in `~/.claude/CLAUDE.md` and
-   is self-contained (works even if the hook is absent).
+1. `capture-transcript` summarizes a transcript delta with openbrain's existing
+   `extraction:` model and stores it via `capture_thought` — no nested `claude`
+   process spawned (no recursion).
+2. Wired to both `Stop` and `PreCompact` (matchers `auto` + `manual`), a real
+   Claude Code session produces a searchable openbrain thought **on session end
+   and on each compaction**, with no capture phrase from the user — verified live.
+3. In a session that compacts multiple times, each capture covers only the delta
+   since the prior watermark; captures do not overlap or duplicate (watermark +
+   fingerprint) — verified.
+4. The auto-captured thought, stored with only `content`, is fully enriched by
+   the #010 write path (plans compose).
+5. A trivial/no-op delta produces no capture.
+6. The per-session watermark persists across fires and is keyed by `session_id`.
+7. One-sentence teardown instruction installed in `~/.claude/CLAUDE.md`, working
+   even if the hooks are absent.

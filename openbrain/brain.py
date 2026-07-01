@@ -1971,10 +1971,27 @@ _UUID_RE = re.compile(
 )
 
 
+def _openalex_wid_by_title(title: str, *, year=None, authors=None) -> str | None:
+    """Resolve a DOI-less paper to its OpenAlex work id by scored title search
+    (title similarity + year/author corroboration), so the citation walk can seed
+    from papers that have no DOI. Returns the W-id (url) of the best match above
+    the match threshold, else None."""
+    cands = sources.openalex_search(title, limit=5)
+    if not cands:
+        return None
+    best = max(
+        cands,
+        key=lambda c: sources._score_candidate(title, c, year=year, authors=authors),
+    )
+    score = sources._score_candidate(title, best, year=year, authors=authors)
+    return best.get("url") if score >= sources.MATCH_THRESHOLD else None
+
+
 async def get_citations(ref: str) -> list[dict]:
     """Citation neighbors of a paper, identified by a library uuid, a DOI, or an
-    OpenAlex work id. The driver holds library uuids, so resolve uuid -> stored
-    DOI -> OpenAlex work; a bare DOI resolves the same way; a W-id is used as-is.
+    OpenAlex work id. The driver holds library uuids, so resolve uuid -> its
+    OpenAlex work (via the stored DOI, or by scored title/author/year search when
+    the paper has no DOI); a bare DOI resolves the same way; a W-id is used as-is.
     Returns neighbor metadata dicts (no library ids — the driver stores keepers
     via store_papers to mint ids). Empty list when the paper can't be resolved."""
     loop = asyncio.get_event_loop()
@@ -1984,19 +2001,31 @@ async def get_citations(ref: str) -> list[dict]:
 
     if r.startswith("W") or "openalex.org/W" in r:
         wid: str | None = r
-    else:
-        doi: str | None = None
-        if _UUID_RE.match(r):
-            pool = await get_pool()
-            async with pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    "SELECT doi FROM library WHERE id = $1::uuid", r
-                )
-            doi = row["doi"] if row else None
-        else:
-            doi = sources._normalize_doi(r) or r
-        if not doi:
+    elif _UUID_RE.match(r):
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT doi, title, authors, year FROM library WHERE id = $1::uuid", r
+            )
+        if not row:
             return []
+        if row["doi"]:
+            rec = await loop.run_in_executor(
+                None, lambda: sources.openalex_lookup(row["doi"], "doi")
+            )
+            wid = rec.get("url") if rec else None
+        elif row["title"]:
+            wid = await loop.run_in_executor(
+                None,
+                lambda: _openalex_wid_by_title(
+                    row["title"], year=row["year"], authors=row["authors"]
+                ),
+            )
+        else:
+            wid = None
+    else:
+        # Bare DOI (or DOI-ish string).
+        doi = sources._normalize_doi(r) or r
         rec = await loop.run_in_executor(
             None, lambda: sources.openalex_lookup(doi, "doi")
         )

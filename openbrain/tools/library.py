@@ -309,6 +309,8 @@ def register(mcp):
 
         if ids:
             anchor_ids = [s.strip() for s in ids.split(",") if s.strip()]
+            for aid in anchor_ids:
+                anchors.extend(await brain.resolve_reference(paper_id=aid))
         elif any(v is not None for v in (doi, title, journal, authors, year)):
             author_list = (
                 [a.strip() for a in authors.split(",") if a.strip()]

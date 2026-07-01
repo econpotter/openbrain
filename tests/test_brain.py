@@ -1992,9 +1992,45 @@ class GetCitationsTests(unittest.IsolatedAsyncioTestCase):
             out = await brain.get_citations("11111111-1111-1111-1111-111111111111")
         self.assertEqual(out[0]["title"], "N")
 
-    async def test_uuid_without_doi_returns_empty(self):
+    async def test_uuid_missing_row_returns_empty(self):
         conn = _DeleteConnection(row=None)
         with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
+            out = await brain.get_citations("11111111-1111-1111-1111-111111111111")
+        self.assertEqual(out, [])
+
+    async def test_doi_less_paper_resolves_by_title_search(self):
+        conn = _DeleteConnection(
+            row={"doi": None, "title": "Endogenous Property Rights",
+                 "authors": ["Jane Doe"], "year": 2011}
+        )
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))),
+            patch.object(
+                brain.sources, "openalex_search",
+                lambda q, limit=5: [
+                    {"title": "Endogenous Property Rights", "year": 2011,
+                     "authors": ["Jane Doe"], "url": "https://openalex.org/W7"},
+                ],
+            ),
+            patch.object(brain.sources, "openalex_citation_neighbors",
+                         lambda w: [{"title": "N", "doi": "10.1/n"}]),
+        ):
+            out = await brain.get_citations("11111111-1111-1111-1111-111111111111")
+        self.assertEqual(out[0]["title"], "N")
+
+    async def test_doi_less_below_threshold_returns_empty(self):
+        conn = _DeleteConnection(
+            row={"doi": None, "title": "Water Rights Allocation",
+                 "authors": [], "year": 2020}
+        )
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))),
+            patch.object(
+                brain.sources, "openalex_search",
+                lambda q, limit=5: [{"title": "Totally Different Paper",
+                                     "url": "https://openalex.org/W9"}],
+            ),
+        ):
             out = await brain.get_citations("11111111-1111-1111-1111-111111111111")
         self.assertEqual(out, [])
 

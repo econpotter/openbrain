@@ -180,11 +180,24 @@ def _openalex_record(work: dict) -> PaperMeta:
     )
 
 
+_OPENALEX_KEY = os.environ.get("OPENALEX_API_KEY")
+
+
+def _openalex_auth(leading: str) -> str:
+    """Query-string tail for OpenAlex requests: the polite-pool mailto plus the
+    premium api_key when OPENALEX_API_KEY is set. `leading` is '?' or '&'."""
+    parts = ["mailto=open-brain@localhost"]
+    if _OPENALEX_KEY:
+        parts.append("api_key=" + _OPENALEX_KEY)
+    return leading + "&".join(parts)
+
+
 def openalex_lookup(identifier: str, id_kind: str) -> PaperMeta | None:
     if id_kind == "doi":
         doi = _normalize_doi(identifier)
         work = _get_json(
             f"https://api.openalex.org/works/doi:{urllib.parse.quote(doi)}"
+            + _openalex_auth("?")
         )
         return _openalex_record(work) if work else None
     if id_kind == "title":
@@ -197,7 +210,7 @@ def openalex_search(query: str, limit: int = 10) -> list[PaperMeta]:
     q = urllib.parse.quote(query)
     url = (
         f"https://api.openalex.org/works?search={q}&per-page={limit}"
-        "&mailto=open-brain@localhost"
+        + _openalex_auth("&")
     )
     # OpenAlex's search endpoint 504s under load; retry a few times before giving
     # up (the work/DOI endpoints are more reliable, so this only guards search).
@@ -246,7 +259,7 @@ def openalex_search_paged(
     while cursor:
         url = (
             f"https://api.openalex.org/works?search={q}&per-page={per_page}"
-            f"&cursor={urllib.parse.quote(cursor)}&mailto=open-brain@localhost"
+            f"&cursor={urllib.parse.quote(cursor)}" + _openalex_auth("&")
         )
         if filters:
             url += "&filter=" + urllib.parse.quote(",".join(filters))
@@ -271,7 +284,7 @@ def openalex_concepts(term: str, limit: int = 25) -> list[dict]:
     q = urllib.parse.quote(term)
     data = _get_json(
         f"https://api.openalex.org/concepts?search={q}&per-page={limit}"
-        "&mailto=open-brain@localhost"
+        + _openalex_auth("&")
     )
     if not data:
         return []
@@ -297,8 +310,8 @@ def _openalex_works_by_ids(ids: list[str]) -> list[dict]:
         batch = ids[start : start + 50]
         data = _get_json(
             "https://api.openalex.org/works?per-page=50"
-            "&mailto=open-brain@localhost"
-            "&filter=openalex_id:" + "|".join(batch)
+            + _openalex_auth("&")
+            + "&filter=openalex_id:" + "|".join(batch)
         )
         if data:
             records.extend(data.get("results", []))
@@ -317,7 +330,7 @@ def openalex_citation_neighbors(openalex_id: str) -> list[PaperMeta]:
     wid = openalex_id.replace("https://openalex.org/", "")
     work = _get_json(
         f"https://api.openalex.org/works/{urllib.parse.quote(wid)}"
-        "?mailto=open-brain@localhost"
+        + _openalex_auth("?")
     )
     if not work:
         return []

@@ -616,8 +616,13 @@ async def refresh_all_embeddings(entity_type: str = "all") -> dict:
 async def store_thought(content: str, metadata: dict | None = None) -> str:
     pool = await get_pool()
     embedding = await _embed_or_none(content)
-    meta = metadata or {}
+    meta = dict(metadata or {})
     thought_type = meta.get("type")
+    # Record that importance came from the caller so deferred extraction never
+    # overrides it (AC #2: caller-supplied metadata wins). Sparse captures leave
+    # this unset, so extraction is free to fill the importance the model derives.
+    if "importance" in meta:
+        meta["importance_source"] = "caller"
     async with pool.acquire() as conn:
         result = await conn.fetchval(
             """
@@ -707,18 +712,18 @@ async def extract_thought_metadata(thought_id: str) -> dict:
 
     Loads the thought, prompts the extraction model, and merges the result back
     through the canonical ``upsert_thought`` path — so caller-supplied metadata is
-    preserved (scalars keep the larger importance, arrays union) and ``enriched``
-    flips true. Newly discovered people/projects get their embeddings refreshed and
-    link edges created. A model outage or off-schema output leaves the thought a
-    straggler (``enriched=false``) for a later ``backfill_thought_extractions`` run
-    — it never writes garbage and never re-raises. An already-enriched thought is
-    skipped. Returns ``{thought_id, status}`` where status is
-    ``done|skipped|error|missing``.
+    preserved (arrays union; a caller-supplied importance always wins) and
+    ``enriched`` flips true. Newly discovered people/projects get their embeddings
+    refreshed and link edges created. A model outage or off-schema output leaves the
+    thought a straggler (``enriched=false``) for a later
+    ``backfill_thought_extractions`` run — it never writes garbage and never
+    re-raises. An already-enriched thought is skipped. Returns
+    ``{thought_id, status}`` where status is ``done|skipped|error|missing``.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT content, embedding, enriched FROM thoughts WHERE id = $1",
+            "SELECT content, embedding, enriched, metadata FROM thoughts WHERE id = $1",
             thought_id,
         )
     if row is None:
@@ -737,18 +742,31 @@ async def extract_thought_metadata(thought_id: str) -> dict:
         logger.warning("Thought extraction returned off-schema output for %s", thought_id)
         return {"thought_id": thought_id, "status": "error"}
 
+    # Caller-supplied importance is authoritative: if the capturing agent set it,
+    # drop the model's importance so the merge cannot override it. When the caller
+    # left it unset (sparse auto-capture), keep the extracted value so it lands
+    # verbatim under the overwrite scalar mode below.
+    existing_meta = row["metadata"] or {}
+    if isinstance(existing_meta, str):
+        existing_meta = json.loads(existing_meta)
+    if existing_meta.get("importance_source") == "caller":
+        extracted.pop("importance", None)
+
     extracted["enriched"] = True
     async with pool.acquire() as conn:
         # Re-run the canonical write path: the fingerprint matches, so this hits
-        # the merge branch (union arrays, GREATEST importance, enriched OR true)
-        # and preserves the existing embedding. p_type is NULL so the caller's
-        # thought type is never overwritten.
+        # the merge branch (union arrays, enriched OR true) and preserves the
+        # existing embedding. Scalar mode 'overwrite' lets a sparse capture take
+        # the model's importance verbatim (even below the seeded default); a
+        # caller's importance was already stripped above, so it is never sent here.
+        # p_type is NULL so the caller's thought type is never overwritten.
         await conn.fetchval(
-            "SELECT upsert_thought($1, $2, $3::jsonb, $4)",
+            "SELECT upsert_thought($1, $2, $3::jsonb, $4, $5)",
             row["content"],
             row["embedding"],
             json.dumps(extracted),
             None,
+            "overwrite",
         )
 
     people = extracted.get("people") or []

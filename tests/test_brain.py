@@ -362,22 +362,42 @@ class ThoughtDerivationTests(unittest.IsolatedAsyncioTestCase):
             # so its write latency never includes an extraction-model round trip.
             extract.assert_not_awaited()
             await asyncio.sleep(0)
-        return thought_id, extract
+        return thought_id, extract, connection
 
     async def test_sparse_capture_schedules_extraction_deferred(self):
-        thought_id, extract = await self._store_and_capture_schedule({"type": "thought"})
+        thought_id, extract, connection = await self._store_and_capture_schedule(
+            {"type": "thought"}
+        )
         self.assertEqual(thought_id, "thought-1")
         extract.assert_awaited_once_with("thought-1")
+        # Sparse capture carries no importance, so no caller marker is written and
+        # extraction stays free to fill the model's importance.
+        stored = json.loads(connection.calls[0][1][2])
+        self.assertNotIn("importance_source", stored)
 
     async def test_enriched_metadata_opts_out_of_extraction(self):
-        _, extract = await self._store_and_capture_schedule(
+        _, extract, _ = await self._store_and_capture_schedule(
             {"type": "thought", "enriched": True}
         )
         extract.assert_not_awaited()
 
+    async def test_caller_importance_is_marked_for_extraction(self):
+        # A capture that sets importance stamps importance_source=caller so the
+        # later extraction knows not to override it (AC #2).
+        _, _, connection = await self._store_and_capture_schedule(
+            {"type": "thought", "importance": 2}
+        )
+        stored = json.loads(connection.calls[0][1][2])
+        self.assertEqual(stored["importance_source"], "caller")
+
     async def test_extract_enriches_via_canonical_upsert(self):
         connection = _ExtractConnection(
-            {"content": "Met Ada re SDC", "embedding": [0.1, 0.2], "enriched": False}
+            {
+                "content": "Met Ada re SDC",
+                "embedding": [0.1, 0.2],
+                "enriched": False,
+                "metadata": {},
+            }
         )
         refresh = AsyncMock()
         link = AsyncMock()
@@ -402,11 +422,74 @@ class ThoughtDerivationTests(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(args[2])
         self.assertTrue(payload["enriched"])
         self.assertEqual(payload["tags"], ["sdc"])
+        # Sparse capture: the caller set no importance, so the model's value lands.
         self.assertEqual(payload["importance"], 5)
         # p_type is NULL so extraction never overwrites the caller's thought type.
         self.assertIsNone(args[3])
+        # Scalar mode 'overwrite' lets the extracted importance land verbatim.
+        self.assertEqual(args[4], "overwrite")
         refresh.assert_awaited_once_with(["Ada"], ["SDC"])
         link.assert_awaited_once_with("thought-1", ["Ada"], ["SDC"])
+
+    async def test_extract_preserves_caller_importance(self):
+        # Caller marked a low, deliberate importance; the model wants to raise it.
+        # The caller's value must win (AC #2), so extraction drops its importance
+        # and never sends it to the merge.
+        connection = _ExtractConnection(
+            {
+                "content": "Ephemeral note about Ada",
+                "embedding": [0.1, 0.2],
+                "enriched": False,
+                "metadata": {"importance": 2, "importance_source": "caller"},
+            }
+        )
+        raw = '{"tags":["ada"],"people":["Ada"],"importance":5}'
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(
+                brain, "complete_extraction_prompt", AsyncMock(return_value=raw)
+            ),
+            patch.object(brain, "_refresh_mentioned_entities", AsyncMock()),
+            patch.object(brain, "_link_thought_entities", AsyncMock()),
+        ):
+            res = await brain.extract_thought_metadata("thought-1")
+
+        self.assertEqual(res["status"], "done")
+        _, args = connection.fetchval_calls[0]
+        payload = json.loads(args[2])
+        # Importance stripped: the merge keeps the caller's stored value untouched.
+        self.assertNotIn("importance", payload)
+        # Arrays still union — the model's discovered tags/people are additive.
+        self.assertEqual(payload["tags"], ["ada"])
+        self.assertTrue(payload["enriched"])
+
+    async def test_extract_sparse_importance_can_go_below_default(self):
+        # Sparse capture, model returns an importance below the seeded default.
+        # 'overwrite' mode must let it land (GREATEST would have pinned it up).
+        connection = _ExtractConnection(
+            {
+                "content": "Trivial passing remark",
+                "embedding": [0.1, 0.2],
+                "enriched": False,
+                "metadata": {"importance": 3},  # seeded default, not caller-set
+            }
+        )
+        raw = '{"tags":["chatter"],"importance":1}'
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(
+                brain, "complete_extraction_prompt", AsyncMock(return_value=raw)
+            ),
+            patch.object(brain, "_refresh_mentioned_entities", AsyncMock()),
+            patch.object(brain, "_link_thought_entities", AsyncMock()),
+        ):
+            res = await brain.extract_thought_metadata("thought-1")
+
+        self.assertEqual(res["status"], "done")
+        _, args = connection.fetchval_calls[0]
+        payload = json.loads(args[2])
+        self.assertEqual(payload["importance"], 1)
+        self.assertEqual(args[4], "overwrite")
 
     async def test_extract_model_down_leaves_straggler(self):
         connection = _ExtractConnection(

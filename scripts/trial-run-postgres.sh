@@ -34,13 +34,16 @@ docker run --detach \
     pgvector/pgvector:pg16 >/dev/null
 
 echo "Waiting for PostgreSQL initialization..."
-for _ in $(seq 1 60); do
-    if docker exec "$CONTAINER_NAME" psql \
-        --username openbrain \
-        --dbname openbrain \
-        --tuples-only \
-        --command "SELECT to_regprocedure('upsert_thought(text,vector,jsonb,text)') IS NOT NULL;" \
-        2>/dev/null | grep --quiet t; then
+for _ in $(seq 1 90); do
+    # The entrypoint applies every schema file against a temporary server and
+    # then restarts. Gate on the "init process complete" marker so the probe
+    # never races ahead of a later file (e.g. 005_search's match_thoughts) the
+    # way a single-function check does, then wait for the real server to accept
+    # connections.
+    if docker logs "$CONTAINER_NAME" 2>&1 \
+        | grep --quiet "PostgreSQL init process complete" \
+       && docker exec "$CONTAINER_NAME" pg_isready \
+        --username openbrain --dbname openbrain >/dev/null 2>&1; then
         break
     fi
     if [ "$(docker inspect --format '{{.State.Running}}' "$CONTAINER_NAME")" != "true" ]; then
@@ -53,7 +56,8 @@ if ! docker exec "$CONTAINER_NAME" psql \
     --username openbrain \
     --dbname openbrain \
     --tuples-only \
-    --command "SELECT to_regprocedure('upsert_thought(text,vector,jsonb,text)') IS NOT NULL;" \
+    --command "SELECT to_regprocedure('upsert_thought(text,vector,jsonb,text,text)') IS NOT NULL
+                 AND to_regproc('match_thoughts') IS NOT NULL;" \
     2>/dev/null | grep --quiet t; then
     echo "ERROR: PostgreSQL did not finish schema initialization."
     echo
@@ -83,7 +87,7 @@ BEGIN
         RAISE EXCEPTION 'vector extension is missing';
     END IF;
 
-    IF to_regprocedure('upsert_thought(text,vector,jsonb,text)') IS NULL THEN
+    IF to_regprocedure('upsert_thought(text,vector,jsonb,text,text)') IS NULL THEN
         RAISE EXCEPTION 'upsert_thought function is missing';
     END IF;
 
@@ -133,27 +137,49 @@ BEGIN
         RAISE EXCEPTION 'tag metadata was not merged';
     END IF;
 
-    -- Enriched-flag lifecycle + extraction merge precedence (Plan F). A sparse
-    -- auto-capture lands enriched=false; the deferred extraction re-runs the same
-    -- upsert with the derived metadata, which must flip enriched=true, union the
-    -- arrays, and keep the larger (caller) importance rather than clobber it. The
-    -- test row is removed afterwards so it does not perturb the later aggregates.
+    -- Enriched-flag lifecycle + extraction merge precedence (Plan F). Two paths,
+    -- both re-running the canonical upsert exactly as brain.extract_thought_metadata
+    -- does. Test rows are removed afterwards so they do not perturb later aggregates.
+
+    -- Reject an unknown scalar mode up front (fail loud, no silent fallback).
+    BEGIN
+        PERFORM upsert_thought(
+            'A mode guard probe', v_embedding, '{}'::jsonb, NULL, 'bogus'
+        );
+        RAISE EXCEPTION 'invalid scalar mode was accepted';
+    EXCEPTION
+        WHEN others THEN
+            IF SQLERRM NOT LIKE '%unknown p_scalar_mode%' THEN
+                RAISE;
+            END IF;
+    END;
+
+    -- Path A — sparse auto-capture (caller set no importance, so it seeds the
+    -- default 3). The deferred extraction re-upserts in 'overwrite' scalar mode,
+    -- so the model's importance lands verbatim even when it is BELOW the default:
+    -- GREATEST would have pinned it back up and lost the signal (AC #1). Arrays
+    -- union and enriched flips true.
     PERFORM upsert_thought(
         'A sparse auto-captured thought',
         v_embedding,
-        '{"importance":6,"tags":["caller"]}'::jsonb,
+        '{"tags":["caller"]}'::jsonb,
         'thought'
     );
     IF (SELECT enriched FROM thoughts
         WHERE content = 'A sparse auto-captured thought') THEN
         RAISE EXCEPTION 'sparse capture was marked enriched before extraction';
     END IF;
+    IF (SELECT importance FROM thoughts
+        WHERE content = 'A sparse auto-captured thought') <> 3 THEN
+        RAISE EXCEPTION 'sparse capture did not seed the default importance';
+    END IF;
 
     PERFORM upsert_thought(
         'A sparse auto-captured thought',
         v_embedding,
-        '{"enriched":true,"importance":2,"tags":["extracted"],"people":["Ada"]}'::jsonb,
-        NULL
+        '{"enriched":true,"importance":1,"tags":["extracted"],"people":["Ada"]}'::jsonb,
+        NULL,
+        'overwrite'
     );
     SELECT *
     INTO v_thought
@@ -164,10 +190,14 @@ BEGIN
         RAISE EXCEPTION 'extraction re-upsert did not set enriched=true';
     END IF;
 
-    IF v_thought.importance <> 6 THEN
+    IF v_thought.importance <> 1 THEN
         RAISE EXCEPTION
-            'extraction clobbered the larger caller importance: %',
+            'overwrite mode did not let the extracted importance land: %',
             v_thought.importance;
+    END IF;
+
+    IF (v_thought.metadata->>'importance')::int <> 1 THEN
+        RAISE EXCEPTION 'metadata importance was not synced to the extracted value';
     END IF;
 
     IF NOT v_thought.metadata @> '{"tags":["caller","extracted"]}'::jsonb THEN
@@ -178,11 +208,45 @@ BEGIN
         RAISE EXCEPTION 'extraction did not add the discovered person';
     END IF;
 
-    IF (v_thought.metadata->>'importance')::int <> 6 THEN
-        RAISE EXCEPTION 'metadata importance was not normalized to the caller value';
+    DELETE FROM thoughts WHERE content = 'A sparse auto-captured thought';
+
+    -- Path B — caller-set importance wins (AC #2). A deliberate low importance (2)
+    -- must survive even when the model wants a higher one. brain.extract_thought_metadata
+    -- strips importance from the extracted payload when importance_source='caller',
+    -- so the overwrite-mode merge below never receives it and the caller's 2 stands.
+    PERFORM upsert_thought(
+        'A deliberately ephemeral thought',
+        v_embedding,
+        '{"importance":2,"importance_source":"caller","tags":["caller"]}'::jsonb,
+        'thought'
+    );
+    PERFORM upsert_thought(
+        'A deliberately ephemeral thought',
+        v_embedding,
+        '{"enriched":true,"tags":["extracted"],"people":["Ada"]}'::jsonb,
+        NULL,
+        'overwrite'
+    );
+    SELECT *
+    INTO v_thought
+    FROM thoughts
+    WHERE content = 'A deliberately ephemeral thought';
+
+    IF v_thought.importance <> 2 THEN
+        RAISE EXCEPTION
+            'extraction overrode the caller''s deliberate importance: %',
+            v_thought.importance;
     END IF;
 
-    DELETE FROM thoughts WHERE content = 'A sparse auto-captured thought';
+    IF NOT v_thought.enriched THEN
+        RAISE EXCEPTION 'caller-importance extraction did not set enriched=true';
+    END IF;
+
+    IF NOT v_thought.metadata @> '{"tags":["caller","extracted"]}'::jsonb THEN
+        RAISE EXCEPTION 'caller-importance extraction did not union tags';
+    END IF;
+
+    DELETE FROM thoughts WHERE content = 'A deliberately ephemeral thought';
 
     PERFORM upsert_thought(
         'A distant thought about archival policy',

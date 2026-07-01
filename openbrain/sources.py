@@ -17,6 +17,7 @@ what order) is owned by brain.py and passed in via the `order` argument.
 """
 
 import difflib
+import http.client
 import json
 import os
 import re
@@ -466,13 +467,30 @@ _s2_last = 0.0
 
 
 def _s2_get(url: str) -> dict | None:
+    """Throttled S2 GET. Uses http.client (not urllib) so the api-key header is
+    sent verbatim: urllib title-cases header names to `X-api-key`, but S2 requires
+    a case-sensitive `x-api-key`."""
     global _s2_last
     with _s2_lock:
         wait = _S2_MIN_INTERVAL - (time.monotonic() - _s2_last)
         if wait > 0:
             time.sleep(wait)
         _s2_last = time.monotonic()
-    return _get_json(url, headers=_s2_headers())
+    parts = urllib.parse.urlsplit(url)
+    path = parts.path + (f"?{parts.query}" if parts.query else "")
+    headers = {"User-Agent": _UA["User-Agent"], **_s2_headers()}
+    conn = http.client.HTTPSConnection(parts.netloc, timeout=_TIMEOUT)
+    try:
+        conn.request("GET", path, headers=headers)
+        resp = conn.getresponse()
+        body = resp.read()
+        if resp.status != 200:
+            return None
+        return json.loads(body)
+    except Exception:
+        return None
+    finally:
+        conn.close()
 
 
 def _s2_record(paper: dict) -> PaperMeta:

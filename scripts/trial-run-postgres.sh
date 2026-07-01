@@ -133,6 +133,57 @@ BEGIN
         RAISE EXCEPTION 'tag metadata was not merged';
     END IF;
 
+    -- Enriched-flag lifecycle + extraction merge precedence (Plan F). A sparse
+    -- auto-capture lands enriched=false; the deferred extraction re-runs the same
+    -- upsert with the derived metadata, which must flip enriched=true, union the
+    -- arrays, and keep the larger (caller) importance rather than clobber it. The
+    -- test row is removed afterwards so it does not perturb the later aggregates.
+    PERFORM upsert_thought(
+        'A sparse auto-captured thought',
+        v_embedding,
+        '{"importance":6,"tags":["caller"]}'::jsonb,
+        'thought'
+    );
+    IF (SELECT enriched FROM thoughts
+        WHERE content = 'A sparse auto-captured thought') THEN
+        RAISE EXCEPTION 'sparse capture was marked enriched before extraction';
+    END IF;
+
+    PERFORM upsert_thought(
+        'A sparse auto-captured thought',
+        v_embedding,
+        '{"enriched":true,"importance":2,"tags":["extracted"],"people":["Ada"]}'::jsonb,
+        NULL
+    );
+    SELECT *
+    INTO v_thought
+    FROM thoughts
+    WHERE content = 'A sparse auto-captured thought';
+
+    IF NOT v_thought.enriched THEN
+        RAISE EXCEPTION 'extraction re-upsert did not set enriched=true';
+    END IF;
+
+    IF v_thought.importance <> 6 THEN
+        RAISE EXCEPTION
+            'extraction clobbered the larger caller importance: %',
+            v_thought.importance;
+    END IF;
+
+    IF NOT v_thought.metadata @> '{"tags":["caller","extracted"]}'::jsonb THEN
+        RAISE EXCEPTION 'extraction did not union caller and extracted tags';
+    END IF;
+
+    IF NOT v_thought.metadata @> '{"people":["Ada"]}'::jsonb THEN
+        RAISE EXCEPTION 'extraction did not add the discovered person';
+    END IF;
+
+    IF (v_thought.metadata->>'importance')::int <> 6 THEN
+        RAISE EXCEPTION 'metadata importance was not normalized to the caller value';
+    END IF;
+
+    DELETE FROM thoughts WHERE content = 'A sparse auto-captured thought';
+
     PERFORM upsert_thought(
         'A distant thought about archival policy',
         v_distant_embedding,

@@ -95,6 +95,71 @@ def register(mcp):
         return "\n".join(lines)
 
     @mcp.tool
+    async def list_pending_thoughts(limit: int = 100) -> str:
+        """
+        List thoughts still missing a derived asset, naming which step is pending:
+        an embedding (embed model was down at capture) or extraction (enrichment
+        not yet complete). Use this to see *which* thoughts are unsearchable or
+        unenriched. Run backfill_thought_embeddings and/or
+        backfill_thought_extractions to fix them.
+
+        Args:
+            limit: Maximum number of thoughts to list.
+        """
+        records = await brain.list_pending_thoughts(limit=limit)
+        if not records:
+            return "No thoughts pending embedding or extraction."
+        lines = [f"{len(records)} thought(s) pending:"]
+        for r in records:
+            pending = []
+            if r["needs_embedding"]:
+                pending.append("embedding")
+            if r["needs_extraction"]:
+                pending.append("extraction")
+            lines.append(f"- [{', '.join(pending)}] {r['content']} [{r['id']}]")
+        return "\n".join(lines)
+
+    @mcp.tool
+    async def backfill_thought_embeddings(limit: int = 500) -> str:
+        """
+        Embed thoughts stored without an embedding (e.g. the embed model was down
+        when the thought was captured). Run this after the local embedding model
+        is back up. Safe to re-run; it only touches thoughts whose embedding is
+        still missing.
+
+        Args:
+            limit: Maximum number of pending thoughts to embed in this run.
+        """
+        result = await brain.backfill_thought_embeddings(limit=limit)
+        if result["pending_before"] == 0:
+            return "No thoughts pending embedding."
+        return (
+            f"Backfill: {result['embedded']} embedded, {result['failed']} failed, "
+            f"{result['pending_after']} still pending "
+            f"(of {result['pending_before']} before this run)."
+        )
+
+    @mcp.tool
+    async def backfill_thought_extractions(limit: int = 100) -> str:
+        """
+        Enrich thoughts left unenriched because the extraction model was down when
+        they were captured. Extracts tags/people/projects/action_items/importance
+        and creates entity links. Safe to re-run; it only touches thoughts that are
+        not yet enriched.
+
+        Args:
+            limit: Maximum number of unenriched thoughts to process in this run.
+        """
+        result = await brain.backfill_thought_extractions(limit=limit)
+        if result["pending_before"] == 0:
+            return "No thoughts pending extraction."
+        return (
+            f"Backfill: {result['extracted']} enriched, {result['failed']} failed, "
+            f"{result['pending_after']} still pending "
+            f"(of {result['pending_before']} before this run)."
+        )
+
+    @mcp.tool
     async def backfill_links(limit: int = 1000) -> str:
         """
         Populate the `links` graph table for thoughts that mention people or

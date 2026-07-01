@@ -78,6 +78,26 @@ async def _run_once() -> None:
         status,
     )
 
+    tb = await brain.backfill_thought_embeddings()
+    tb_status = "succeeded" if tb["failed"] == 0 else "completed with failures"
+    logger.info(
+        "Thought embedding backfill %s: "
+        f"{tb['embedded']} embedded, {tb['failed']} failed, "
+        f"{tb['pending_after']} still pending "
+        f"(of {tb['pending_before']} before this run).",
+        tb_status,
+    )
+
+    tx = await brain.backfill_thought_extractions()
+    tx_status = "succeeded" if tx["failed"] == 0 else "completed with failures"
+    logger.info(
+        "Thought extraction backfill %s: "
+        f"{tx['extracted']} enriched, {tx['failed']} failed, "
+        f"{tx['pending_after']} still pending "
+        f"(of {tx['pending_before']} before this run).",
+        tx_status,
+    )
+
     from openbrain import findings
 
     fb = await findings.backfill_findings()

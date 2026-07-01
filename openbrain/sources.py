@@ -195,10 +195,19 @@ def openalex_lookup(identifier: str, id_kind: str) -> PaperMeta | None:
 
 def openalex_search(query: str, limit: int = 10) -> list[PaperMeta]:
     q = urllib.parse.quote(query)
-    data = _get_json(
+    url = (
         f"https://api.openalex.org/works?search={q}&per-page={limit}"
         "&mailto=open-brain@localhost"
     )
+    # OpenAlex's search endpoint 504s under load; retry a few times before giving
+    # up (the work/DOI endpoints are more reliable, so this only guards search).
+    data = None
+    for attempt in range(3):
+        data = _get_json(url)
+        if data is not None:
+            break
+        if attempt < 2:
+            time.sleep(1.5 * (attempt + 1))
     if not data:
         return []
     return [_openalex_record(w) for w in data.get("results", [])]

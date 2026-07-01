@@ -20,6 +20,7 @@ import difflib
 import json
 import os
 import re
+import threading
 import time
 import unicodedata
 import urllib.error
@@ -457,6 +458,23 @@ def _s2_headers() -> dict:
     return {"x-api-key": key} if key else {}
 
 
+# Semantic Scholar caps at ~1 request/second (even with a key). Throttle all S2
+# requests to that rate so a source fan-out or batch fetch can't burst into 429s.
+_S2_MIN_INTERVAL = 1.0
+_s2_lock = threading.Lock()
+_s2_last = 0.0
+
+
+def _s2_get(url: str) -> dict | None:
+    global _s2_last
+    with _s2_lock:
+        wait = _S2_MIN_INTERVAL - (time.monotonic() - _s2_last)
+        if wait > 0:
+            time.sleep(wait)
+        _s2_last = time.monotonic()
+    return _get_json(url, headers=_s2_headers())
+
+
 def _s2_record(paper: dict) -> PaperMeta:
     ext = paper.get("externalIds") or {}
     return PaperMeta(
@@ -484,18 +502,15 @@ def semantic_scholar_lookup(identifier: str, id_kind: str) -> PaperMeta | None:
     else:
         results = semantic_scholar_search(identifier, limit=1)
         return results[0] if results else None
-    data = _get_json(
-        f"{base}/{urllib.parse.quote(pid)}?fields={_S2_FIELDS}", headers=_s2_headers()
-    )
+    data = _s2_get(f"{base}/{urllib.parse.quote(pid)}?fields={_S2_FIELDS}")
     return _s2_record(data) if data else None
 
 
 def semantic_scholar_search(query: str, limit: int = 10) -> list[PaperMeta]:
     q = urllib.parse.quote(query)
-    data = _get_json(
+    data = _s2_get(
         "https://api.semanticscholar.org/graph/v1/paper/search"
-        f"?query={q}&limit={limit}&fields={_S2_FIELDS}",
-        headers=_s2_headers(),
+        f"?query={q}&limit={limit}&fields={_S2_FIELDS}"
     )
     if not data:
         return []

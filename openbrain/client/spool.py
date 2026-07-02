@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 
 from openbrain.client.config import SPOOL_DIR
@@ -36,7 +37,20 @@ def enqueue(tool: str, arguments: dict, queued_at: str, spool_dir: Path = SPOOL_
         index += 1
         path = spool_dir / _new_name(index)
     payload = {"tool": tool, "arguments": arguments, "queued_at": queued_at}
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    data = json.dumps(payload, indent=2, sort_keys=True)
+    # Atomic write: fully materialize a temp file in the same dir, fsync it, then
+    # os.replace into place. A crash mid-write leaves only the .tmp file (which
+    # the *.json glob ignores), never a partial JSON that load() would choke on.
+    fd, tmp = tempfile.mkstemp(prefix=".spool-", suffix=".json.tmp", dir=spool_dir)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
     return path
 
 

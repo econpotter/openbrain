@@ -196,7 +196,14 @@ def _flush_spool(client: MCPClient) -> tuple[int, int]:
     """Flush spooled captures FIFO. Returns (flushed, remaining)."""
     flushed = 0
     for entry_path in spool.pending():
-        entry = spool.load(entry_path)
+        try:
+            entry = spool.load(entry_path)
+        except (json.JSONDecodeError, OSError) as exc:
+            # A stray malformed spool file (e.g. a crash mid-write on an older
+            # client) must not abort the whole flush. Skip it loudly and leave it
+            # on disk — never silently discard a capture we cannot parse.
+            err.print(f"sweep: skipping malformed spool file {entry_path.name}: {exc}")
+            continue
         try:
             client.call_tool(entry["tool"], entry.get("arguments", {}))
         except (MCPError, MCPToolError):

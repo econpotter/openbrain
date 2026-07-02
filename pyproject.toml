@@ -29,6 +29,7 @@ server = [
     "openai",
     "python-dotenv",
     "bibtexparser",
+    "citer @ git+https://github.com/econpotter/citer",
 ]
 
 [project.scripts]

@@ -49,7 +49,7 @@ class CliTests(unittest.TestCase):
     def test_cli_citations_emits_neighbors(self):
         neighbors = [{"title": "Neighbor", "doi": "10.1/n"}]
         with patch(
-            "openbrain.sources.openalex_citation_neighbors", lambda _id: neighbors
+            "openbrain.brain.get_citations", new=AsyncMock(return_value=neighbors)
         ):
             res = CliRunner().invoke(app, ["citations", "W1"])
         self.assertEqual(res.exit_code, 0)

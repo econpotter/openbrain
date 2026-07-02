@@ -1255,7 +1255,7 @@ class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
         candidates = [{"title": "A Paper", "doi": "10.1/x", "authors": ["Ada"]}]
         store_paper_mock = AsyncMock()
         with (
-            patch.object(brain.sources, "resolve", return_value=candidates),
+            patch.object(brain.papers, "search_topic", return_value=candidates),
             patch.object(brain, "_store_paper", store_paper_mock),
         ):
             result = await brain.fetch_papers(topic="bandwidth selection")
@@ -1269,7 +1269,7 @@ class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
         candidates = [{"title": "A Paper", "doi": "10.1/x"}]
         report = {"stored": 1, "deduped": 0, "results": [{"id": "id-1"}]}
         with (
-            patch.object(brain.sources, "resolve", return_value=candidates),
+            patch.object(brain.papers, "search_topic", return_value=candidates),
             patch.object(brain, "store_papers", AsyncMock(return_value=report)),
         ):
             result = await brain.fetch_papers(topic="water", store=True)
@@ -1283,7 +1283,7 @@ class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
             return_value={"title": "A Paper", "deduped": False}
         )
         with (
-            patch.object(brain.sources, "resolve", return_value=meta),
+            patch.object(brain.papers, "resolve_known_item", return_value=meta),
             patch.object(brain, "_store_paper", store_paper_mock),
         ):
             result = await brain.fetch_papers(identifier="10.1/x")
@@ -1294,12 +1294,13 @@ class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
     async def test_known_item_passes_threshold_and_corroboration(self):
         captured = {}
 
-        def fake_resolve(**kw):
+        def fake_resolve(identifier, **kw):
             captured.update(kw)
+            captured["identifier"] = identifier
             return {"title": "A", "doi": "10.1/a"}
 
         with (
-            patch.object(brain.sources, "resolve", fake_resolve),
+            patch.object(brain.papers, "resolve_known_item", fake_resolve),
             patch.object(
                 brain,
                 "_store_paper",
@@ -1527,9 +1528,7 @@ class StorePapersTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 brain, "get_pool", AsyncMock(return_value=_Pool(_FetchConnection([])))
             ),
-            patch.object(
-                brain.sources, "crossref_lookup", lambda d, k: {"abstract": "filled"}
-            ),
+            patch.object(brain.papers, "lookup", lambda d: {"abstract": "filled"}),
             patch.object(brain.venues, "match", AsyncMock(return_value="AJAE")),
         ):
             out = await brain.store_papers(
@@ -2099,12 +2098,13 @@ class StoreAcquiredPaperTests(unittest.IsolatedAsyncioTestCase):
             await brain.store_acquired_paper(
                 {"doi": "https://doi.org/10.1257/AER.123", "title": "T"}
             )
-        # dedup looks up case-insensitively; the stored DOI is the bare form.
+        # dedup looks up case-insensitively; the stored DOI is the bare,
+        # lowercased form (DOIs are case-insensitive — citer normalizes them).
         self.assertTrue(any("lower(doi)" in q for q, _ in conn.fetchrow_calls))
         insert = next(
             args for q, args in conn.fetchrow_calls if "INSERT INTO library" in q
         )
-        self.assertEqual(insert[5], "10.1257/AER.123")  # https://doi.org/ stripped
+        self.assertEqual(insert[5], "10.1257/aer.123")  # prefix stripped, lowercased
 
     async def test_dedups_on_title_year_when_no_doi(self):
         conn = _PaperConnection(
@@ -2329,24 +2329,37 @@ class DeletePaperTests(unittest.IsolatedAsyncioTestCase):
 
 
 class GetCitationsTests(unittest.IsolatedAsyncioTestCase):
-    async def test_wid_used_directly(self):
-        with patch.object(
-            brain.sources, "openalex_citation_neighbors",
-            lambda w: [{"title": "Neighbor", "doi": "10.1/n", "url": "https://openalex.org/W2"}],
-        ), patch.object(brain.sources, "openalex_lookup", lambda i, k: (_ for _ in ()).throw(AssertionError("should not lookup for a W-id"))):
+    """brain.get_citations resolves the input to an identifier/descriptor and
+    forwards it to papers.citation_neighbors (which walks the graph via citer).
+    The fuzzy-threshold and graph behavior itself is covered in test_papers.py."""
+
+    async def test_wid_forwarded_as_openalex_id(self):
+        captured = {}
+
+        def fake(**kw):
+            captured.update(kw)
+            return [{"title": "Neighbor", "doi": "10.1/n"}]
+
+        with patch.object(brain.papers, "citation_neighbors", fake):
             out = await brain.get_citations("W1")
+        self.assertEqual(captured["openalex_id"], "W1")
+        self.assertNotIn("doi", captured)
         self.assertEqual(out[0]["doi"], "10.1/n")
 
-    async def test_uuid_resolves_via_stored_doi(self):
+    async def test_uuid_forwards_stored_doi(self):
         conn = _DeleteConnection(row={"doi": "10.1/x"})
+        captured = {}
+
+        def fake(**kw):
+            captured.update(kw)
+            return [{"title": "N", "doi": "10.1/n"}]
+
         with (
             patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))),
-            patch.object(brain.sources, "openalex_lookup",
-                         lambda i, k: {"url": "https://openalex.org/W9"}),
-            patch.object(brain.sources, "openalex_citation_neighbors",
-                         lambda w: [{"title": "N", "doi": "10.1/n"}]),
+            patch.object(brain.papers, "citation_neighbors", fake),
         ):
             out = await brain.get_citations("11111111-1111-1111-1111-111111111111")
+        self.assertEqual(captured["doi"], "10.1/x")
         self.assertEqual(out[0]["title"], "N")
 
     async def test_uuid_missing_row_returns_empty(self):
@@ -2355,40 +2368,38 @@ class GetCitationsTests(unittest.IsolatedAsyncioTestCase):
             out = await brain.get_citations("11111111-1111-1111-1111-111111111111")
         self.assertEqual(out, [])
 
-    async def test_doi_less_paper_resolves_by_title_search(self):
+    async def test_doi_less_forwards_title_descriptor(self):
         conn = _DeleteConnection(
             row={"doi": None, "title": "Endogenous Property Rights",
                  "authors": ["Jane Doe"], "year": 2011}
         )
+        captured = {}
+
+        def fake(**kw):
+            captured.update(kw)
+            return [{"title": "N", "doi": "10.1/n"}]
+
         with (
             patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))),
-            patch.object(
-                brain.sources, "openalex_search",
-                lambda q, limit=5: [
-                    {"title": "Endogenous Property Rights", "year": 2011,
-                     "authors": ["Jane Doe"], "url": "https://openalex.org/W7"},
-                ],
-            ),
-            patch.object(brain.sources, "openalex_citation_neighbors",
-                         lambda w: [{"title": "N", "doi": "10.1/n"}]),
+            patch.object(brain.papers, "citation_neighbors", fake),
         ):
             out = await brain.get_citations("11111111-1111-1111-1111-111111111111")
+        self.assertEqual(captured["title"], "Endogenous Property Rights")
+        self.assertEqual(captured["year"], 2011)
+        self.assertEqual(captured["authors"], ["Jane Doe"])
+        self.assertNotIn("doi", captured)
         self.assertEqual(out[0]["title"], "N")
 
-    async def test_doi_less_below_threshold_returns_empty(self):
-        conn = _DeleteConnection(
-            row={"doi": None, "title": "Water Rights Allocation",
-                 "authors": [], "year": 2020}
-        )
-        with (
-            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))),
-            patch.object(
-                brain.sources, "openalex_search",
-                lambda q, limit=5: [{"title": "Totally Different Paper",
-                                     "url": "https://openalex.org/W9"}],
-            ),
-        ):
-            out = await brain.get_citations("11111111-1111-1111-1111-111111111111")
+    async def test_bare_doi_forwarded_normalized(self):
+        captured = {}
+
+        def fake(**kw):
+            captured.update(kw)
+            return []
+
+        with patch.object(brain.papers, "citation_neighbors", fake):
+            out = await brain.get_citations("https://doi.org/10.1257/AER.123")
+        self.assertEqual(captured["doi"], "10.1257/aer.123")  # prefix stripped, lowercased
         self.assertEqual(out, [])
 
 

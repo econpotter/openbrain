@@ -1,7 +1,7 @@
 """Offline tests for the external-driver MCP tools (issue #007).
 
 Each tool wraps a deterministic primitive; here we drive the registered tool
-functions directly against a fake MCP and monkeypatched brain/sources, so no
+functions directly against a fake MCP and monkeypatched brain, so no
 live network or database is touched. The result keys must match the
 agentic-researcher Openbrain client contract exactly: get_citations ->
 {citations}, score_relevance -> {scores}, store_papers -> {stored, deduped,
@@ -74,16 +74,18 @@ class GetCitationsTests(unittest.TestCase):
         neighbors = [{"title": "Ref A", "doi": "10.1/a"}, {"title": "Citing B"}]
         tools = _register(driver)
         with patch(
-            "openbrain.sources.openalex_citation_neighbors",
-            return_value=neighbors,
+            "openbrain.brain.get_citations",
+            new=AsyncMock(return_value=neighbors),
         ) as nb:
             out = asyncio.run(tools["get_citations"]("W123"))
-        nb.assert_called_once_with("W123")
+        nb.assert_awaited_once_with("W123")
         self.assertEqual(json.loads(out), {"citations": neighbors})
 
     def test_empty_neighbors_serialize_to_empty_list(self):
         tools = _register(driver)
-        with patch("openbrain.sources.openalex_citation_neighbors", return_value=[]):
+        with patch(
+            "openbrain.brain.get_citations", new=AsyncMock(return_value=[])
+        ):
             out = asyncio.run(tools["get_citations"]("W0"))
         self.assertEqual(json.loads(out), {"citations": []})
 

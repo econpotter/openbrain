@@ -14,7 +14,7 @@ echo "User:        $CURRENT_USER"
 echo
 
 # ── 1. Python venv ──────────────────────────────────────────────────────────
-echo "[1/4] Creating Python virtual environment..."
+echo "[1/6] Creating Python virtual environment..."
 cd "$PROJECT_DIR"
 python3 -m venv .venv
 source .venv/bin/activate
@@ -23,7 +23,7 @@ pip install --quiet -r requirements.txt
 echo "      Done."
 
 # ── 2. .env ──────────────────────────────────────────────────────────────────
-echo "[2/4] Checking .env..."
+echo "[2/6] Checking .env..."
 if [ ! -f "$PROJECT_DIR/.env" ]; then
     cp "$PROJECT_DIR/.env.example" "$PROJECT_DIR/.env"
     echo "      Created .env from .env.example."
@@ -35,11 +35,11 @@ else
 fi
 
 # ── 3. Database ───────────────────────────────────────────────────────────────
-echo "[3/4] Installing core database schema..."
+echo "[3/6] Installing core database schema..."
 bash "$SCRIPT_DIR/setup_db.sh"
 
 # ── 4. systemd service ────────────────────────────────────────────────────────
-echo "[4/4] Installing systemd service..."
+echo "[4/6] Installing systemd service..."
 SERVICE_SRC="$SCRIPT_DIR/openbrain-mcp.service"
 SERVICE_DST="/etc/systemd/system/$SERVICE_NAME.service"
 
@@ -55,7 +55,7 @@ echo "      Service enabled and started."
 echo "      Check status: sudo systemctl status $SERVICE_NAME"
 
 # ── 5. Backup timer ───────────────────────────────────────────────────────────
-echo "[5/5] Installing backup timer..."
+echo "[5/6] Installing backup timer..."
 for unit in openbrain-backup.service openbrain-backup.timer; do
     sed \
         -e "s|__PROJECT_DIR__|$PROJECT_DIR|g" \
@@ -66,6 +66,19 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now openbrain-backup.timer
 echo "      Backup timer enabled (runs daily)."
 echo "      Run now: bash $SCRIPT_DIR/backup.sh"
+
+# ── 6. Thought straggler sweep timer ──────────────────────────────────────────
+echo "[6/6] Installing thought straggler sweep timer..."
+for unit in openbrain-sweep.service openbrain-sweep.timer; do
+    sed \
+        -e "s|__PROJECT_DIR__|$PROJECT_DIR|g" \
+        -e "s|__USER__|$CURRENT_USER|g" \
+        "$SCRIPT_DIR/$unit" | sudo tee "/etc/systemd/system/$unit" > /dev/null
+done
+sudo systemctl daemon-reload
+sudo systemctl enable --now openbrain-sweep.timer
+echo "      Sweep timer enabled (heals thought stragglers every few minutes)."
+echo "      Run now: $PROJECT_DIR/.venv/bin/python scripts/openbrain-maintenance.py --sweep"
 
 echo
 echo "=== Installation complete ==="

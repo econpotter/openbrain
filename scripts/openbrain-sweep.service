@@ -1,0 +1,12 @@
+[Unit]
+Description=openbrain thought straggler sweep (embedding + extraction backfill)
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__PROJECT_DIR__
+EnvironmentFile=__PROJECT_DIR__/.env
+ExecStart=__PROJECT_DIR__/.venv/bin/python scripts/openbrain-maintenance.py --sweep
+StandardOutput=journal
+StandardError=journal

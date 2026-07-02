@@ -616,8 +616,13 @@ async def refresh_all_embeddings(entity_type: str = "all") -> dict:
 async def store_thought(content: str, metadata: dict | None = None) -> str:
     pool = await get_pool()
     embedding = await _embed_or_none(content)
-    meta = metadata or {}
+    meta = dict(metadata or {})
     thought_type = meta.get("type")
+    # Record that importance came from the caller so deferred extraction never
+    # overrides it (AC #2: caller-supplied metadata wins). Sparse captures leave
+    # this unset, so extraction is free to fill the importance the model derives.
+    if "importance" in meta:
+        meta["importance_source"] = "caller"
     async with pool.acquire() as conn:
         result = await conn.fetchval(
             """
@@ -640,7 +645,137 @@ async def store_thought(content: str, metadata: dict | None = None) -> str:
         asyncio.create_task(_refresh_mentioned_entities(people, projects))
         asyncio.create_task(_link_thought_entities(thought_id, people, projects))
 
+    # Deferred derivation: unless the caller has already marked the thought
+    # enriched, schedule model extraction (tags/people/projects/action_items/
+    # importance) as a fire-and-forget task. The write path never blocks on the
+    # extraction model — a straggler is healed by backfill_thought_extractions if
+    # the model is down. Mirrors the embedding degradation path above.
+    if not meta.get("enriched"):
+        asyncio.create_task(extract_thought_metadata(thought_id))
+
     return thought_id
+
+
+def _thought_extraction_prompt(content: str) -> str:
+    """Build the deterministic per-thought metadata extraction prompt.
+
+    Asks for the same structured fields a curating agent would supply, so an
+    automated capture (content only) ends up as rich as a hand-curated one. Type
+    is deliberately not extracted — the model must never reclassify a caller's
+    thought type.
+    """
+    return (
+        "Extract structured metadata from this personal memory note as a JSON "
+        "object with keys: "
+        '"tags"(array of topic keywords), "people"(array of names mentioned), '
+        '"projects"(array of project names mentioned), '
+        '"action_items"(array of concrete follow-up actions), '
+        '"importance"(integer 0-6, higher = more durable). '
+        "Use empty arrays and omit fields you cannot determine. "
+        "Return ONLY the JSON object.\n\n"
+        f"NOTE:\n{content}"
+    )
+
+
+def parse_thought_metadata(raw: str) -> dict | None:
+    """Parse the model's JSON object into validated metadata, or None if off-schema.
+
+    Returns a dict with only the well-formed fields (empty dict is valid — the
+    model ran and found nothing to add, which still counts as enriched). Returns
+    None only when the output is not a parseable JSON object, so the caller can
+    leave the thought as a straggler for a later retry rather than marking it
+    enriched with garbage. Mirrors ``findings.parse_findings``' drop-don't-crash
+    contract.
+    """
+    try:
+        data = json.loads(raw[raw.index("{") : raw.rindex("}") + 1])
+    except (ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    out: dict = {}
+    for key in ("tags", "people", "projects", "action_items"):
+        value = data.get(key)
+        if isinstance(value, list):
+            items = [str(item).strip() for item in value if str(item).strip()]
+            if items:
+                out[key] = items
+    try:
+        out["importance"] = int(data["importance"])
+    except (KeyError, TypeError, ValueError):
+        pass
+    return out
+
+
+async def extract_thought_metadata(thought_id: str) -> dict:
+    """Derive and merge structured metadata for one thought (the second derivation).
+
+    Loads the thought, prompts the extraction model, and merges the result back
+    through the canonical ``upsert_thought`` path — so caller-supplied metadata is
+    preserved (arrays union; a caller-supplied importance always wins) and
+    ``enriched`` flips true. Newly discovered people/projects get their embeddings
+    refreshed and link edges created. A model outage or off-schema output leaves the
+    thought a straggler (``enriched=false``) for a later
+    ``backfill_thought_extractions`` run — it never writes garbage and never
+    re-raises. An already-enriched thought is skipped. Returns
+    ``{thought_id, status}`` where status is ``done|skipped|error|missing``.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT content, embedding, enriched, metadata FROM thoughts WHERE id = $1",
+            thought_id,
+        )
+    if row is None:
+        return {"thought_id": thought_id, "status": "missing"}
+    if row["enriched"]:
+        return {"thought_id": thought_id, "status": "skipped"}
+
+    try:
+        raw = await complete_extraction_prompt(_thought_extraction_prompt(row["content"]))
+    except Exception as exc:
+        logger.warning("Thought extraction failed for %s: %s", thought_id, exc)
+        return {"thought_id": thought_id, "status": "error"}
+
+    extracted = parse_thought_metadata(raw)
+    if extracted is None:
+        logger.warning("Thought extraction returned off-schema output for %s", thought_id)
+        return {"thought_id": thought_id, "status": "error"}
+
+    # Caller-supplied importance is authoritative: if the capturing agent set it,
+    # drop the model's importance so the merge cannot override it. When the caller
+    # left it unset (sparse auto-capture), keep the extracted value so it lands
+    # verbatim under the overwrite scalar mode below.
+    existing_meta = row["metadata"] or {}
+    if isinstance(existing_meta, str):
+        existing_meta = json.loads(existing_meta)
+    if existing_meta.get("importance_source") == "caller":
+        extracted.pop("importance", None)
+
+    extracted["enriched"] = True
+    async with pool.acquire() as conn:
+        # Re-run the canonical write path: the fingerprint matches, so this hits
+        # the merge branch (union arrays, enriched OR true) and preserves the
+        # existing embedding. Scalar mode 'overwrite' lets a sparse capture take
+        # the model's importance verbatim (even below the seeded default); a
+        # caller's importance was already stripped above, so it is never sent here.
+        # p_type is NULL so the caller's thought type is never overwritten.
+        await conn.fetchval(
+            "SELECT upsert_thought($1, $2, $3::jsonb, $4, $5)",
+            row["content"],
+            row["embedding"],
+            json.dumps(extracted),
+            None,
+            "overwrite",
+        )
+
+    people = extracted.get("people") or []
+    projects = extracted.get("projects") or []
+    if people or projects:
+        await _refresh_mentioned_entities(people, projects)
+        await _link_thought_entities(thought_id, people, projects)
+
+    return {"thought_id": thought_id, "status": "done"}
 
 
 async def search_thoughts_vec(
@@ -2241,6 +2376,125 @@ async def backfill_chunk_embeddings(limit: int = 500) -> dict:
         "embedded": embedded,
         "failed": failed,
         "pending_after": pending_before - embedded,
+    }
+
+
+async def list_pending_thoughts(limit: int = 100) -> list[dict]:
+    """List thoughts still missing a derived asset, naming which step is pending.
+
+    A thought is pending when its ``embedding IS NULL`` (embed model was down at
+    write time) or ``enriched = false`` (extraction has not completed). Mirrors
+    ``list_pending_embeddings`` for the library: shows *which* thoughts are
+    unsearchable or unenriched, not just how many. Run ``backfill_thought_embeddings``
+    and/or ``backfill_thought_extractions`` to fix them.
+
+    Returns one row per thought: {id, content, needs_embedding, needs_extraction}.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, content, embedding IS NULL AS needs_embedding, "
+            "NOT enriched AS needs_extraction FROM thoughts "
+            "WHERE embedding IS NULL OR NOT enriched "
+            "ORDER BY created_at LIMIT $1",
+            limit,
+        )
+    return [
+        {
+            "id": str(r["id"]),
+            "content": r["content"][:200],
+            "needs_embedding": r["needs_embedding"],
+            "needs_extraction": r["needs_extraction"],
+        }
+        for r in rows
+    ]
+
+
+async def backfill_thought_embeddings(limit: int = 500) -> dict:
+    """Embed thoughts stored without an embedding (embed model down at write time).
+
+    The thought write path fail-softs to a NULL embedding on an embed outage; this
+    is the straggler backstop that fills them in once the model is back. Uses the
+    same configured ``embed`` model — never a substitute — so vectors stay in one
+    geometry, exactly like ``backfill_chunk_embeddings``. Per-thought failures are
+    skipped and retried on a later run. Safe to re-run.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        pending_before = await conn.fetchval(
+            "SELECT count(*) FROM thoughts WHERE embedding IS NULL"
+        )
+        rows = await conn.fetch(
+            "SELECT id, content FROM thoughts WHERE embedding IS NULL "
+            "ORDER BY created_at LIMIT $1",
+            limit,
+        )
+
+    embedded = 0
+    failed = 0
+    for row in rows:
+        try:
+            emb = await embed(row["content"])
+        except Exception as exc:
+            failed += 1
+            logger.warning("Backfill embed failed for thought %s: %s", row["id"], exc)
+            continue
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE thoughts SET embedding = $1 WHERE id = $2", emb, row["id"]
+            )
+        embedded += 1
+
+    return {
+        "pending_before": pending_before,
+        "embedded": embedded,
+        "failed": failed,
+        "pending_after": pending_before - embedded,
+    }
+
+
+async def backfill_thought_extractions(limit: int = 100) -> dict:
+    """Enrich thoughts left ``enriched=false`` (extraction model down at write time).
+
+    The deferred write-path task normally enriches within seconds; this heals the
+    stragglers when that task's model call failed. Runs ``extract_thought_metadata``
+    for the oldest unenriched thoughts and tallies outcomes. Mirrors
+    ``findings.backfill_findings``: re-runnable, only touches unenriched rows, and
+    reports remaining pending so a capped run never reads as complete.
+
+    Returns ``{pending_before, extracted, failed, pending_after}``.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        pending_before = await conn.fetchval(
+            "SELECT count(*) FROM thoughts WHERE NOT enriched"
+        )
+        rows = await conn.fetch(
+            "SELECT id FROM thoughts WHERE NOT enriched ORDER BY created_at LIMIT $1",
+            limit,
+        )
+
+    extracted = 0
+    failed = 0
+    for row in rows:
+        try:
+            res = await extract_thought_metadata(str(row["id"]))
+        except Exception as exc:
+            failed += 1
+            logger.warning(
+                "Thought extraction backfill failed for %s: %s", row["id"], exc
+            )
+            continue
+        if res["status"] == "done":
+            extracted += 1
+        elif res["status"] == "error":
+            failed += 1
+
+    return {
+        "pending_before": pending_before,
+        "extracted": extracted,
+        "failed": failed,
+        "pending_after": pending_before - extracted,
     }
 
 

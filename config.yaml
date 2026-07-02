@@ -92,3 +92,8 @@ extraction:
   run_at: "18:00"
   lookback_hours: 24
   batch_size: 50
+  # Fast straggler backstop cadence (openbrain-maintenance.py --sweep-loop). The
+  # deferred write-path task normally enriches a thought within seconds; this sweep
+  # heals the ones whose model was down at write time. Short so an outage is fixed
+  # within minutes, not at the next nightly run_at. Separate schedule from run_at.
+  sweep_interval_minutes: 5

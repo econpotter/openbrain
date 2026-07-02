@@ -198,6 +198,7 @@ class StoreThoughtTests(unittest.IsolatedAsyncioTestCase):
             patch.object(brain, "embed", AsyncMock(return_value=[0.1, 0.2])),
             patch.object(brain, "_refresh_mentioned_entities", refresh),
             patch.object(brain, "_link_thought_entities", AsyncMock()),
+            patch.object(brain, "extract_thought_metadata", AsyncMock()),
         ):
             thought_id = await brain.store_thought("A repeated thought", metadata)
             await asyncio.sleep(0)
@@ -228,6 +229,7 @@ class StoreThoughtTests(unittest.IsolatedAsyncioTestCase):
                 AsyncMock(side_effect=RuntimeError("All embedding providers failed")),
             ),
             patch.object(brain, "_refresh_mentioned_entities", AsyncMock()),
+            patch.object(brain, "extract_thought_metadata", AsyncMock()),
         ):
             thought_id = await brain.store_thought(
                 "Capture even when embeddings are down.",
@@ -327,6 +329,361 @@ class StoreThoughtTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("Invalid status", result)
         store_thought.assert_not_awaited()
+
+
+class _ExtractConnection:
+    """Fake conn for extract_thought_metadata: one thought row, records upserts."""
+
+    def __init__(self, row):
+        self.row = row
+        self.fetchval_calls = []
+
+    async def fetchrow(self, query, *args):
+        return self.row
+
+    async def fetchval(self, query, *args):
+        self.fetchval_calls.append((query, args))
+        return {"id": "thought-1", "inserted": False, "metadata_changed": True}
+
+
+class ThoughtDerivationTests(unittest.IsolatedAsyncioTestCase):
+    async def _store_and_capture_schedule(self, metadata):
+        connection = _ThoughtConnection(
+            {"id": "thought-1", "inserted": True, "metadata_changed": False}
+        )
+        extract = AsyncMock()
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(brain, "embed", AsyncMock(return_value=[0.1, 0.2])),
+            patch.object(brain, "extract_thought_metadata", extract),
+        ):
+            thought_id = await brain.store_thought("Sparse thought", metadata)
+            # Deferred: store_thought schedules extraction but does not await it,
+            # so its write latency never includes an extraction-model round trip.
+            extract.assert_not_awaited()
+            await asyncio.sleep(0)
+        return thought_id, extract, connection
+
+    async def test_sparse_capture_schedules_extraction_deferred(self):
+        thought_id, extract, connection = await self._store_and_capture_schedule(
+            {"type": "thought"}
+        )
+        self.assertEqual(thought_id, "thought-1")
+        extract.assert_awaited_once_with("thought-1")
+        # Sparse capture carries no importance, so no caller marker is written and
+        # extraction stays free to fill the model's importance.
+        stored = json.loads(connection.calls[0][1][2])
+        self.assertNotIn("importance_source", stored)
+
+    async def test_enriched_metadata_opts_out_of_extraction(self):
+        _, extract, _ = await self._store_and_capture_schedule(
+            {"type": "thought", "enriched": True}
+        )
+        extract.assert_not_awaited()
+
+    async def test_caller_importance_is_marked_for_extraction(self):
+        # A capture that sets importance stamps importance_source=caller so the
+        # later extraction knows not to override it (AC #2).
+        _, _, connection = await self._store_and_capture_schedule(
+            {"type": "thought", "importance": 2}
+        )
+        stored = json.loads(connection.calls[0][1][2])
+        self.assertEqual(stored["importance_source"], "caller")
+
+    async def test_extract_enriches_via_canonical_upsert(self):
+        connection = _ExtractConnection(
+            {
+                "content": "Met Ada re SDC",
+                "embedding": [0.1, 0.2],
+                "enriched": False,
+                "metadata": {},
+            }
+        )
+        refresh = AsyncMock()
+        link = AsyncMock()
+        raw = (
+            '{"tags":["sdc"],"people":["Ada"],"projects":["SDC"],'
+            '"action_items":["email Ada"],"importance":5}'
+        )
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(
+                brain, "complete_extraction_prompt", AsyncMock(return_value=raw)
+            ),
+            patch.object(brain, "_refresh_mentioned_entities", refresh),
+            patch.object(brain, "_link_thought_entities", link),
+        ):
+            res = await brain.extract_thought_metadata("thought-1")
+
+        self.assertEqual(res["status"], "done")
+        query, args = connection.fetchval_calls[0]
+        self.assertIn("SELECT upsert_thought", query)
+        self.assertEqual(args[0], "Met Ada re SDC")
+        payload = json.loads(args[2])
+        self.assertTrue(payload["enriched"])
+        self.assertEqual(payload["tags"], ["sdc"])
+        # Sparse capture: the caller set no importance, so the model's value lands.
+        self.assertEqual(payload["importance"], 5)
+        # p_type is NULL so extraction never overwrites the caller's thought type.
+        self.assertIsNone(args[3])
+        # Scalar mode 'overwrite' lets the extracted importance land verbatim.
+        self.assertEqual(args[4], "overwrite")
+        refresh.assert_awaited_once_with(["Ada"], ["SDC"])
+        link.assert_awaited_once_with("thought-1", ["Ada"], ["SDC"])
+
+    async def test_extract_preserves_caller_importance(self):
+        # Caller marked a low, deliberate importance; the model wants to raise it.
+        # The caller's value must win (AC #2), so extraction drops its importance
+        # and never sends it to the merge.
+        connection = _ExtractConnection(
+            {
+                "content": "Ephemeral note about Ada",
+                "embedding": [0.1, 0.2],
+                "enriched": False,
+                "metadata": {"importance": 2, "importance_source": "caller"},
+            }
+        )
+        raw = '{"tags":["ada"],"people":["Ada"],"importance":5}'
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(
+                brain, "complete_extraction_prompt", AsyncMock(return_value=raw)
+            ),
+            patch.object(brain, "_refresh_mentioned_entities", AsyncMock()),
+            patch.object(brain, "_link_thought_entities", AsyncMock()),
+        ):
+            res = await brain.extract_thought_metadata("thought-1")
+
+        self.assertEqual(res["status"], "done")
+        _, args = connection.fetchval_calls[0]
+        payload = json.loads(args[2])
+        # Importance stripped: the merge keeps the caller's stored value untouched.
+        self.assertNotIn("importance", payload)
+        # Arrays still union — the model's discovered tags/people are additive.
+        self.assertEqual(payload["tags"], ["ada"])
+        self.assertTrue(payload["enriched"])
+
+    async def test_extract_sparse_importance_can_go_below_default(self):
+        # Sparse capture, model returns an importance below the seeded default.
+        # 'overwrite' mode must let it land (GREATEST would have pinned it up).
+        connection = _ExtractConnection(
+            {
+                "content": "Trivial passing remark",
+                "embedding": [0.1, 0.2],
+                "enriched": False,
+                "metadata": {"importance": 3},  # seeded default, not caller-set
+            }
+        )
+        raw = '{"tags":["chatter"],"importance":1}'
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(
+                brain, "complete_extraction_prompt", AsyncMock(return_value=raw)
+            ),
+            patch.object(brain, "_refresh_mentioned_entities", AsyncMock()),
+            patch.object(brain, "_link_thought_entities", AsyncMock()),
+        ):
+            res = await brain.extract_thought_metadata("thought-1")
+
+        self.assertEqual(res["status"], "done")
+        _, args = connection.fetchval_calls[0]
+        payload = json.loads(args[2])
+        self.assertEqual(payload["importance"], 1)
+        self.assertEqual(args[4], "overwrite")
+
+    async def test_extract_model_down_leaves_straggler(self):
+        connection = _ExtractConnection(
+            {"content": "x", "embedding": None, "enriched": False}
+        )
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(
+                brain,
+                "complete_extraction_prompt",
+                AsyncMock(side_effect=RuntimeError("extraction model down")),
+            ),
+        ):
+            res = await brain.extract_thought_metadata("thought-1")
+
+        self.assertEqual(res["status"], "error")
+        self.assertEqual(connection.fetchval_calls, [])
+
+    async def test_extract_off_schema_leaves_straggler(self):
+        connection = _ExtractConnection(
+            {"content": "x", "embedding": None, "enriched": False}
+        )
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(
+                brain,
+                "complete_extraction_prompt",
+                AsyncMock(return_value="sorry, no structured data here"),
+            ),
+        ):
+            res = await brain.extract_thought_metadata("thought-1")
+
+        self.assertEqual(res["status"], "error")
+        self.assertEqual(connection.fetchval_calls, [])
+
+    async def test_extract_skips_already_enriched(self):
+        connection = _ExtractConnection(
+            {"content": "x", "embedding": [0.1], "enriched": True}
+        )
+        prompt = AsyncMock()
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(brain, "complete_extraction_prompt", prompt),
+        ):
+            res = await brain.extract_thought_metadata("thought-1")
+
+        self.assertEqual(res["status"], "skipped")
+        prompt.assert_not_awaited()
+        self.assertEqual(connection.fetchval_calls, [])
+
+    def test_parse_keeps_arrays_and_coerces_importance(self):
+        out = brain.parse_thought_metadata(
+            'prefix {"tags":["a","b"],"importance":"4","people":[],"junk":1} suffix'
+        )
+        self.assertEqual(out["tags"], ["a", "b"])
+        self.assertEqual(out["importance"], 4)
+        self.assertNotIn("people", out)  # empty array dropped
+
+    def test_parse_off_schema_returns_none(self):
+        self.assertIsNone(brain.parse_thought_metadata("no json at all"))
+        self.assertIsNone(brain.parse_thought_metadata('["not an object"]'))
+
+    def test_parse_valid_but_empty_object_is_enrichable(self):
+        # Model ran, found nothing to add: empty dict (not None) so the thought
+        # still gets marked enriched rather than looping as a straggler forever.
+        self.assertEqual(brain.parse_thought_metadata("{}"), {})
+
+    async def test_backfill_thought_embeddings_fills_null_rows(self):
+        connection = _BackfillConnection(
+            pending=2,
+            rows=[{"id": "t1", "content": "a"}, {"id": "t2", "content": "b"}],
+        )
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(brain, "embed", AsyncMock(return_value=[0.1, 0.2])),
+        ):
+            result = await brain.backfill_thought_embeddings()
+
+        self.assertEqual(result["embedded"], 2)
+        self.assertEqual(result["failed"], 0)
+        self.assertEqual(result["pending_after"], 0)
+        self.assertEqual(len(connection.updates), 2)
+
+    async def test_backfill_thought_extractions_tallies_outcomes(self):
+        connection = _BackfillConnection(
+            pending=2, rows=[{"id": "t1"}, {"id": "t2"}]
+        )
+        extract = AsyncMock(
+            side_effect=[
+                {"thought_id": "t1", "status": "done"},
+                {"thought_id": "t2", "status": "error"},
+            ]
+        )
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(brain, "extract_thought_metadata", extract),
+        ):
+            result = await brain.backfill_thought_extractions()
+
+        self.assertEqual(result["extracted"], 1)
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["pending_after"], 1)
+
+    async def test_list_pending_thoughts_names_pending_steps(self):
+        connection = _BackfillConnection(
+            pending=0,
+            rows=[
+                {
+                    "id": "t1",
+                    "content": "alpha",
+                    "needs_embedding": True,
+                    "needs_extraction": False,
+                },
+                {
+                    "id": "t2",
+                    "content": "beta",
+                    "needs_embedding": False,
+                    "needs_extraction": True,
+                },
+            ],
+        )
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))):
+            result = await brain.list_pending_thoughts()
+
+        self.assertEqual(
+            result,
+            [
+                {
+                    "id": "t1",
+                    "content": "alpha",
+                    "needs_embedding": True,
+                    "needs_extraction": False,
+                },
+                {
+                    "id": "t2",
+                    "content": "beta",
+                    "needs_embedding": False,
+                    "needs_extraction": True,
+                },
+            ],
+        )
+
+    async def test_thought_maintenance_tools_report_counts(self):
+        mcp = _Mcp()
+        maintenance_tools.register(mcp)
+        with patch.object(
+            brain,
+            "backfill_thought_embeddings",
+            AsyncMock(
+                return_value={
+                    "pending_before": 3,
+                    "embedded": 2,
+                    "failed": 1,
+                    "pending_after": 1,
+                }
+            ),
+        ):
+            out = await mcp.tools["backfill_thought_embeddings"]()
+        self.assertIn("2 embedded", out)
+        self.assertIn("1 still pending", out)
+
+        with patch.object(
+            brain,
+            "backfill_thought_extractions",
+            AsyncMock(
+                return_value={
+                    "pending_before": 2,
+                    "extracted": 2,
+                    "failed": 0,
+                    "pending_after": 0,
+                }
+            ),
+        ):
+            out = await mcp.tools["backfill_thought_extractions"]()
+        self.assertIn("2 enriched", out)
+
+        with patch.object(
+            brain,
+            "list_pending_thoughts",
+            AsyncMock(
+                return_value=[
+                    {
+                        "id": "t1",
+                        "content": "alpha",
+                        "needs_embedding": True,
+                        "needs_extraction": True,
+                    }
+                ]
+            ),
+        ):
+            out = await mcp.tools["list_pending_thoughts"]()
+        self.assertIn("embedding", out)
+        self.assertIn("extraction", out)
+        self.assertIn("t1", out)
 
 
 class ModelFallbackTests(unittest.IsolatedAsyncioTestCase):

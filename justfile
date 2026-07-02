@@ -24,6 +24,11 @@ test-postgres:
 db-trial:
     bash scripts/trial-run-postgres.sh
 
+# Drive the real thought pipeline (store/extract/backfill) against an ephemeral
+# Postgres over asyncpg; only the model calls are stubbed (Plan F live check)
+pipeline-trial:
+    uv run python scripts/trial-run-thought-pipeline.py
+
 # Lint with ruff
 lint:
     uv run ruff check .

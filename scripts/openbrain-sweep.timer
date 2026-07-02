@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the openbrain thought straggler sweep on a short cadence
+
+[Timer]
+# Fast backstop: heal thought stragglers within minutes of the model coming
+# back, not at the next nightly consolidation. Keep this in step with
+# extraction.sweep_interval_minutes in config.yaml.
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

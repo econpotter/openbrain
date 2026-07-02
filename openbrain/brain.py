@@ -27,7 +27,7 @@ import pgvector.asyncpg
 import yaml
 from dotenv import load_dotenv
 
-from openbrain import sources
+from openbrain import papers
 from openbrain import venues
 from openbrain import venues as venues_mod
 
@@ -1693,7 +1693,7 @@ async def ingest_document_pipeline(
             r = await conn.fetchrow(
                 "SELECT id FROM library WHERE lower(doi) = lower($1) "
                 "AND file_hash IS NULL",
-                sources._normalize_doi(doi) or doi,
+                papers.normalize_doi(doi) or doi,
             )
             upgrade_id = r["id"] if r else None
         if upgrade_id is None and title:
@@ -1797,7 +1797,7 @@ async def ingest_document_pipeline(
 def _paper_sources_order() -> list[str]:
     """Effective source order from config.yaml paper_sources (order ∩ enabled)."""
     cfg = _cfg.get("paper_sources") or {}
-    order = cfg.get("order") or sources._DEFAULT_ORDER
+    order = cfg.get("order") or papers.DEFAULT_ORDER
     enabled = cfg.get("enabled")
     if enabled is not None:
         order = [s for s in order if s in enabled]
@@ -1964,7 +1964,7 @@ async def store_acquired_paper(meta: dict, *, force: bool = False) -> dict:
     # Normalize the DOI (strip any https://doi.org/ prefix; match case-insensitively
     # since DOIs are case-insensitive) so 10.1/X and https://doi.org/10.1/x dedup.
     raw_doi = meta.get("doi")
-    doi = (sources._normalize_doi(raw_doi) or raw_doi) if raw_doi else None
+    doi = (papers.normalize_doi(raw_doi) or raw_doi) if raw_doi else None
     title = meta.get("title")
     async with pool.acquire() as conn:
         existing = None
@@ -2039,24 +2039,24 @@ async def store_acquired_paper(meta: dict, *, force: bool = False) -> dict:
     }
 
 
-async def store_papers(papers: list[dict], *, force: bool = False) -> dict:
-    """Store a caller-chosen list of paper metadata dicts. Per paper: crossref
-    enrich (fill a missing abstract/issn/bibtex/concepts when a DOI is present),
-    venue canon (venue_abbrev), then store_acquired_paper (DOI dedup, abstract
-    embedded, findings inline; no thought emitted). Returns a roll-up plus
-    per-paper rows. Callable directly (store without fetch)."""
-    if not papers:
+async def store_papers(paper_list: list[dict], *, force: bool = False) -> dict:
+    """Store a caller-chosen list of paper metadata dicts. Per paper: DOI enrich
+    (fill a missing abstract/issn/bibtex/concepts when a DOI is present, via a
+    merged citer lookup), venue canon (venue_abbrev), then store_acquired_paper
+    (DOI dedup, abstract embedded, findings inline; no thought emitted). Returns a
+    roll-up plus per-paper rows. Callable directly (store without fetch)."""
+    if not paper_list:
         return {"stored": 0, "deduped": 0, "results": []}
     pool = await get_pool()
     loop = asyncio.get_event_loop()
     results: list[dict] = []
     stored = deduped = 0
-    for raw in papers:
+    for raw in paper_list:
         meta = dict(raw)
         if meta.get("doi") and not meta.get("abstract"):
             doi_value = meta["doi"]
             extra = await loop.run_in_executor(
-                None, lambda: sources.crossref_lookup(doi_value, "doi")
+                None, lambda: papers.lookup(doi_value)
             )
             if extra:
                 for key in ("abstract", "issn_l", "bibtex"):
@@ -2148,27 +2148,12 @@ _UUID_RE = re.compile(
 )
 
 
-def _openalex_wid_by_title(title: str, *, year=None, authors=None) -> str | None:
-    """Resolve a DOI-less paper to its OpenAlex work id by scored title search
-    (title similarity + year/author corroboration), so the citation walk can seed
-    from papers that have no DOI. Returns the W-id (url) of the best match above
-    the match threshold, else None."""
-    cands = sources.openalex_search(title, limit=5)
-    if not cands:
-        return None
-    best = max(
-        cands,
-        key=lambda c: sources._score_candidate(title, c, year=year, authors=authors),
-    )
-    score = sources._score_candidate(title, best, year=year, authors=authors)
-    return best.get("url") if score >= sources.MATCH_THRESHOLD else None
-
-
 async def get_citations(ref: str) -> list[dict]:
     """Citation neighbors of a paper, identified by a library uuid, a DOI, or an
-    OpenAlex work id. The driver holds library uuids, so resolve uuid -> its
-    OpenAlex work (via the stored DOI, or by scored title/author/year search when
-    the paper has no DOI); a bare DOI resolves the same way; a W-id is used as-is.
+    OpenAlex work id. The driver holds library uuids, so resolve uuid -> its DOI,
+    or (for a DOI-less paper) a title + year/author descriptor citer scores into
+    an id; a bare DOI or W-id is used directly. citer walks the citation graph
+    (outbound references + inbound citing works) and merges/dedups the neighbors.
     Returns neighbor metadata dicts (no library ids — the driver stores keepers
     via store_papers to mint ids). Empty list when the paper can't be resolved."""
     loop = asyncio.get_event_loop()
@@ -2176,8 +2161,9 @@ async def get_citations(ref: str) -> list[dict]:
     if not r:
         return []
 
+    kwargs: dict = {"order": _paper_sources_order()}
     if r.startswith("W") or "openalex.org/W" in r:
-        wid: str | None = r
+        kwargs["openalex_id"] = r.replace("https://openalex.org/", "")
     elif _UUID_RE.match(r):
         pool = await get_pool()
         async with pool.acquire() as conn:
@@ -2187,31 +2173,19 @@ async def get_citations(ref: str) -> list[dict]:
         if not row:
             return []
         if row["doi"]:
-            rec = await loop.run_in_executor(
-                None, lambda: sources.openalex_lookup(row["doi"], "doi")
-            )
-            wid = rec.get("url") if rec else None
+            kwargs["doi"] = row["doi"]
         elif row["title"]:
-            wid = await loop.run_in_executor(
-                None,
-                lambda: _openalex_wid_by_title(
-                    row["title"], year=row["year"], authors=row["authors"]
-                ),
-            )
+            kwargs["title"] = row["title"]
+            kwargs["year"] = row["year"]
+            kwargs["authors"] = row["authors"]
         else:
-            wid = None
+            return []
     else:
         # Bare DOI (or DOI-ish string).
-        doi = sources._normalize_doi(r) or r
-        rec = await loop.run_in_executor(
-            None, lambda: sources.openalex_lookup(doi, "doi")
-        )
-        wid = rec.get("url") if rec else None
+        kwargs["doi"] = papers.normalize_doi(r) or r
 
-    if not wid:
-        return []
     return await loop.run_in_executor(
-        None, lambda: sources.openalex_citation_neighbors(wid)
+        None, lambda: papers.citation_neighbors(**kwargs)
     )
 
 
@@ -2232,8 +2206,8 @@ async def _fetch_one(
     loop = asyncio.get_event_loop()
     meta = await loop.run_in_executor(
         None,
-        lambda: sources.resolve(
-            identifier=identifier,
+        lambda: papers.resolve_known_item(
+            identifier,
             order=order,
             min_score=title_threshold,
             year=year,
@@ -2273,11 +2247,9 @@ async def fetch_papers(
 
     if topic is not None:
         resolved = await loop.run_in_executor(
-            None, lambda: sources.resolve(topic=topic, order=order, limit=limit)
+            None, lambda: papers.search_topic(topic, order=order, limit=limit)
         )
-        candidates: list[dict] = (
-            [dict(c) for c in resolved] if isinstance(resolved, list) else []
-        )
+        candidates: list[dict] = [dict(c) for c in resolved]
         stored = 0
         stored_ids: list[str] = []
         if store and candidates:
@@ -2757,7 +2729,7 @@ def _surnames(authors) -> set[str]:
         if not a:
             continue
         token = a.split(",")[0] if "," in a else a.split()[-1]
-        norm = sources._normalize_title(token)
+        norm = papers.normalize_title(token)
         if norm:
             out.add(norm)
     return out
@@ -2775,7 +2747,7 @@ async def resolve_reference(
 ) -> list[dict]:
     """Deterministic reference -> library rows. uuid (`paper_id`) and DOI are
     exact; otherwise a conjunction of normalized fields: a fuzzy title match (the
-    shared sources._score_candidate scorer + threshold, so misspellings still
+    shared papers.score_row scorer + threshold, so misspellings still
     resolve), plus author-surname/year/journal corroboration. "Deterministic"
     means rule-based and repeatable — a fixed scorer + fixed threshold, not
     embeddings. Returns 0, 1, or many rows ranked by score; the caller decides
@@ -2792,7 +2764,7 @@ async def resolve_reference(
 
     # 1. DOI is exact and authoritative.
     if doi:
-        norm = sources._normalize_doi(doi) or doi.strip()
+        norm = papers.normalize_doi(doi) or doi.strip()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 f"SELECT {_LIBRARY_COLS} FROM library WHERE doi = $1", norm
@@ -2818,9 +2790,9 @@ async def resolve_reference(
     cands = [dict(r) for r in rows]
 
     if title:
-        threshold = sources.MATCH_THRESHOLD if min_score is None else min_score
+        threshold = papers.MATCH_THRESHOLD if min_score is None else min_score
         scored = [
-            (r, sources._score_candidate(title, r, year=year, authors=authors))
+            (r, papers.score_row(title, r, year=year, authors=authors))
             for r in cands
         ]
         cands = [

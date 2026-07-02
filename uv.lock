@@ -540,6 +540,17 @@ wheels = [
 ]
 
 [[package]]
+name = "citer"
+version = "0.1.0"
+source = { git = "https://github.com/econpotter/citer#441e43ccf20bff3988ea0f271db0b4fdc15cb9a8" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "typer" },
+]
+
+[[package]]
 name = "click"
 version = "8.4.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1759,6 +1770,7 @@ dependencies = [
 server = [
     { name = "asyncpg" },
     { name = "bibtexparser" },
+    { name = "citer" },
     { name = "fastmcp" },
     { name = "openai" },
     { name = "pdfplumber" },
@@ -1781,6 +1793,7 @@ dev = [
 requires-dist = [
     { name = "asyncpg", marker = "extra == 'server'" },
     { name = "bibtexparser", marker = "extra == 'server'" },
+    { name = "citer", marker = "extra == 'server'", git = "https://github.com/econpotter/citer" },
     { name = "fastmcp", marker = "extra == 'server'" },
     { name = "httpx" },
     { name = "openai", marker = "extra == 'server'" },

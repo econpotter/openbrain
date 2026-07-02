@@ -12,7 +12,7 @@ openbrain's.
 import asyncio
 import json
 
-from openbrain import brain, sources
+from openbrain import brain, papers
 
 
 def register(mcp):
@@ -70,10 +70,8 @@ def register(mcp):
         """Look up OpenAlex concepts matching `term` (with work counts) so a query
         is expanded with real index vocabulary, not guessed synonyms."""
         loop = asyncio.get_event_loop()
-        concepts = await loop.run_in_executor(
-            None, lambda: sources.openalex_concepts(term)
-        )
-        return json.dumps(concepts, indent=2, default=str)
+        found = await loop.run_in_executor(None, lambda: papers.concepts(term))
+        return json.dumps(found, indent=2, default=str)
 
     @mcp.tool
     async def remove_paper(

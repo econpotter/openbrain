@@ -16,7 +16,7 @@ how to work in the repo.
 openbrain/
 ├── openbrain/         # Python package
 │   ├── brain.py       #   Core logic — embed, store, retrieve, fetch, backfill. All DB access lives here.
-│   ├── sources.py     #   Pluggable paper-metadata backends: OpenAlex, CrossRef, Semantic Scholar, arXiv.
+│   ├── papers.py      #   Thin adapter over the `citer` library for external paper metadata (lookup/search/citation graph).
 │   ├── server.py      #   FastMCP server entry point.
 │   ├── cli.py         #   Ingest CLI entry point.
 │   ├── resources.py   #   Read-only MCP guidance resources.
@@ -54,7 +54,7 @@ openbrain/
 - **MCP resources are read-only guidance surfaces.** Keep mutation, search, ingest, and maintenance actions behind tools.
 - **No hardcoded model providers or names.** Read model config from `config.yaml`. See `docs/design/model-config.md`.
 - **Embedding is decoupled from the write path.** Capture/ingest/fetch must persist content even when the embedding model is unavailable; rows land with a null embedding and are filled later by `backfill_embeddings`. Never let an embedding failure abort a write.
-- **Paper fetch is fileless.** `fetch_paper` resolves metadata + abstract through `sources.py` and stores a library record without a PDF on disk. Document ingest (with a file) stays separate.
+- **Paper fetch is fileless.** `fetch_paper` resolves metadata + abstract through `papers.py` (the `citer` adapter) and stores a library record without a PDF on disk. Document ingest (with a file) stays separate.
 
 ---
 

@@ -16,7 +16,7 @@ async def _locate_library_record(id: str | None, match: str | None):
     if id:
         matches = await brain.resolve_reference(paper_id=id)
     elif match:
-        kind = brain.sources.detect_identifier_kind(match)
+        kind = brain.papers.detect_identifier_kind(match)
         ref = {"doi": match} if kind in ("doi", "arxiv") else {"title": match}
         matches = await brain.resolve_reference(**ref)
     else:

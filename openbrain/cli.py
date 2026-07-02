@@ -18,7 +18,6 @@ from rich.table import Table
 
 from openbrain import brain
 from openbrain import findings as findings_mod
-from openbrain import sources
 
 app = typer.Typer(help="openbrain library: ingest and deterministic acquisition.")
 console = Console()
@@ -242,7 +241,7 @@ def citations(
     openalex_id: str = typer.Argument(..., help="OpenAlex work id (W… or full URL)"),
 ):
     """Citation neighbors (referenced + citing works) of an OpenAlex work."""
-    neighbors = sources.openalex_citation_neighbors(openalex_id)
+    neighbors = asyncio.run(brain.get_citations(openalex_id))
     _emit({"neighbors": neighbors})
 
 

@@ -44,14 +44,16 @@ class IsOpenbrainEntryTests(unittest.TestCase):
 
 
 class MergeCodexMcpTests(unittest.TestCase):
-    def _run(self, tmp, toml_text=None):
+    def _run(self, tmp, toml_text=None, env=None):
         home = Path(tmp)
         (home / ".codex").mkdir(parents=True)
         cfg = home / ".codex" / "config.toml"
         if toml_text is not None:
             cfg.write_text(toml_text)
         with patch.object(installer, "HOME", home):
-            with patch.dict("os.environ", {}, clear=False):
+            # clear=True: target_url resolution reads OPENBRAIN_MCP_URL, so a
+            # real export in the calling shell must not leak into the test.
+            with patch.dict("os.environ", env or {}, clear=True):
                 result = installer.merge_codex_mcp()
         return cfg, result
 
@@ -60,10 +62,9 @@ class MergeCodexMcpTests(unittest.TestCase):
             cfg, result = self._run(tmp, toml_text='model = "gpt-5.5"\n')
             self.assertEqual(result, "added")
             parsed = tomllib.loads(cfg.read_text())
-            self.assertEqual(
-                parsed["mcp_servers"]["openbrain"]["bearer_token_env_var"],
-                "OPENBRAIN_MCP_KEY",
-            )
+            ob = parsed["mcp_servers"]["openbrain"]
+            self.assertEqual(ob["bearer_token_env_var"], "OPENBRAIN_MCP_KEY")
+            self.assertEqual(ob["url"], installer.DEFAULT_MCP_URL)
             self.assertEqual(parsed["model"], "gpt-5.5")  # untouched
 
     def test_creates_config_when_missing(self):
@@ -72,11 +73,25 @@ class MergeCodexMcpTests(unittest.TestCase):
             self.assertEqual(result, "added")
             self.assertTrue(cfg.exists())
 
-    def test_heals_stale_bearer_env_var_in_place(self):
+    def test_respects_custom_mcp_url_env_when_adding(self):
+        with TemporaryDirectory() as tmp:
+            cfg, result = self._run(
+                tmp, toml_text="", env={"OPENBRAIN_MCP_URL": "https://custom:8443/mcp"}
+            )
+            self.assertEqual(result, "added")
+            parsed = tomllib.loads(cfg.read_text())
+            self.assertEqual(
+                parsed["mcp_servers"]["openbrain"]["url"], "https://custom:8443/mcp"
+            )
+
+    def test_heals_stale_bearer_and_stale_url_together(self):
+        """Live case found on a real machine: a manually hand-written block used
+        both the wrong bearer var (MCP_ACCESS_KEY) and a stale NordVPN meshnet
+        hostname — the intended path is an ssh tunnel to rhythm.herknet."""
         text = (
             'model = "gpt-5.5"\n\n'
             "[mcp_servers.openbrain]\n"
-            'url = "https://potter.example:8443/mcp"\n'
+            'url = "https://potter.nicholas-fuji.nord:8443/mcp"\n'
             'bearer_token_env_var = "MCP_ACCESS_KEY"\n\n'
             '[projects."/home/x"]\n'
             'trust_level = "trusted"\n'
@@ -87,15 +102,29 @@ class MergeCodexMcpTests(unittest.TestCase):
             parsed = tomllib.loads(cfg.read_text())
             ob = parsed["mcp_servers"]["openbrain"]
             self.assertEqual(ob["bearer_token_env_var"], "OPENBRAIN_MCP_KEY")
-            # url and the unrelated table are preserved.
-            self.assertEqual(ob["url"], "https://potter.example:8443/mcp")
+            self.assertEqual(ob["url"], installer.DEFAULT_MCP_URL)
+            # the unrelated table is preserved.
             self.assertEqual(parsed["projects"]["/home/x"]["trust_level"], "trusted")
             self.assertTrue(cfg.with_suffix(".toml.bak").exists())
+
+    def test_heals_stale_url_when_bearer_already_correct(self):
+        text = (
+            "[mcp_servers.openbrain]\n"
+            'url = "https://potter.nicholas-fuji.nord:8443/mcp"\n'
+            'bearer_token_env_var = "OPENBRAIN_MCP_KEY"\n'
+        )
+        with TemporaryDirectory() as tmp:
+            cfg, result = self._run(tmp, toml_text=text)
+            self.assertEqual(result, "fixed")
+            parsed = tomllib.loads(cfg.read_text())
+            self.assertEqual(
+                parsed["mcp_servers"]["openbrain"]["url"], installer.DEFAULT_MCP_URL
+            )
 
     def test_idempotent_when_already_correct(self):
         text = (
             "[mcp_servers.openbrain]\n"
-            'url = "https://x:8443/mcp"\n'
+            f'url = "{installer.DEFAULT_MCP_URL}"\n'
             'bearer_token_env_var = "OPENBRAIN_MCP_KEY"\n'
         )
         with TemporaryDirectory() as tmp:

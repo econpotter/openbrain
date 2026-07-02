@@ -12,8 +12,10 @@ marketplace.json`), which registers the MCP server, skills, and lifecycle hooks
 in one `enabledPlugins` entry. See `integrations/claude-code/README.md`.
 
 Idempotent and self-healing: re-running replaces only openbrain's own entries
-(never an unrelated project's), fixes a stale MCP `bearer_token_env_var` in
-place, and backs up each file it modifies (to <file>.bak).
+(never an unrelated project's), fixes a stale MCP `bearer_token_env_var` or
+`url` (e.g. a leftover NordVPN meshnet hostname — the intended path is an ssh
+tunnel to rhythm.herknet) in place, and backs up each file it modifies (to
+<file>.bak).
 """
 
 from __future__ import annotations
@@ -119,39 +121,56 @@ def merge_codex_hooks() -> bool:
     return changed
 
 
-def _codex_mcp_block() -> str:
-    url = os.environ.get("OPENBRAIN_MCP_URL") or DEFAULT_MCP_URL
+def _codex_mcp_block(target_url: str) -> str:
     return (
         "[mcp_servers.openbrain]\n"
-        f'url = "{url}"\n'
+        f'url = "{target_url}"\n'
         f'bearer_token_env_var = "{MCP_KEY_ENV_VAR}"\n'
     )
 
 
-def _rewrite_bearer_env_var(text: str) -> str:
-    """Rewrite bearer_token_env_var inside the [mcp_servers.openbrain] table to
-    MCP_KEY_ENV_VAR, preserving url, comments, and every other table."""
+def _rewrite_mcp_block(text: str, target_url: str) -> str:
+    """Rewrite `url` and `bearer_token_env_var` inside [mcp_servers.openbrain]
+    to the target values, preserving comments and every other table.
+
+    Covers both known-stale states seen live: the wrong bearer env var (e.g.
+    MCP_ACCESS_KEY) and a stale meshnet hostname (e.g. a NordVPN `.nord`
+    address) left over from before the ssh-tunnel-to-rhythm.herknet path was
+    the intended one.
+    """
     lines = text.splitlines()
     out: list[str] = []
     in_block = False
-    fixed = False
-    new_line = f'bearer_token_env_var = "{MCP_KEY_ENV_VAR}"'
+    fixed_bearer = False
+    fixed_url = False
+    new_bearer_line = f'bearer_token_env_var = "{MCP_KEY_ENV_VAR}"'
+    new_url_line = f'url = "{target_url}"'
+
+    def _flush_missing_lines() -> None:
+        if not fixed_url:
+            out.append(new_url_line)
+        if not fixed_bearer:
+            out.append(new_bearer_line)
+
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("[") and stripped.endswith("]"):
-            if in_block and not fixed:  # leaving the block without a bearer line
-                out.append(new_line)
-                fixed = True
+            if in_block:  # leaving the block: backfill any line it never had
+                _flush_missing_lines()
             in_block = stripped == "[mcp_servers.openbrain]"
             out.append(line)
             continue
         if in_block and stripped.startswith("bearer_token_env_var"):
-            out.append(new_line)
-            fixed = True
+            out.append(new_bearer_line)
+            fixed_bearer = True
+            continue
+        if in_block and stripped.startswith("url"):
+            out.append(new_url_line)
+            fixed_url = True
             continue
         out.append(line)
-    if in_block and not fixed:
-        out.append(new_line)
+    if in_block:
+        _flush_missing_lines()
     result = "\n".join(out)
     if text.endswith("\n") and not result.endswith("\n"):
         result += "\n"
@@ -161,10 +180,12 @@ def _rewrite_bearer_env_var(text: str) -> str:
 def merge_codex_mcp() -> str:
     """Register the openbrain MCP server in ~/.codex/config.toml, self-healing.
 
-    Adds the [mcp_servers.openbrain] block if absent; if present but pointing at
-    the wrong bearer_token_env_var (e.g. a stale MCP_ACCESS_KEY), fixes it in
-    place rather than skipping. Returns one of: added | fixed | unchanged |
-    unparseable. Backs up the file before any write.
+    Adds the [mcp_servers.openbrain] block if absent; if present but stale —
+    wrong bearer_token_env_var (e.g. MCP_ACCESS_KEY) or a stale meshnet
+    hostname instead of the intended ssh-tunnel target (OPENBRAIN_MCP_URL, or
+    rhythm.herknet by default) — fixes it in place rather than skipping.
+    Returns one of: added | fixed | unchanged | unparseable. Backs up the file
+    before any write.
     """
     path = HOME / ".codex" / "config.toml"
     text = path.read_text() if path.exists() else ""
@@ -173,9 +194,10 @@ def merge_codex_mcp() -> str:
     except tomllib.TOMLDecodeError:
         return "unparseable"  # never clobber a config we can't safely edit
     ob = parsed.get("mcp_servers", {}).get("openbrain")
+    target_url = os.environ.get("OPENBRAIN_MCP_URL") or DEFAULT_MCP_URL
 
     if ob is None:
-        block = _codex_mcp_block()
+        block = _codex_mcp_block(target_url)
         if text and not text.endswith("\n"):
             text += "\n"
         new_text = f"{text}\n{block}" if text else block
@@ -184,10 +206,10 @@ def merge_codex_mcp() -> str:
         path.write_text(new_text)
         return "added"
 
-    if ob.get("bearer_token_env_var") == MCP_KEY_ENV_VAR:
+    if ob.get("bearer_token_env_var") == MCP_KEY_ENV_VAR and ob.get("url") == target_url:
         return "unchanged"
 
-    new_text = _rewrite_bearer_env_var(text)
+    new_text = _rewrite_mcp_block(text, target_url)
     if new_text == text:
         return "unchanged"
     backup(path)

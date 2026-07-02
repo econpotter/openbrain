@@ -118,6 +118,26 @@ class SpoolTests(unittest.TestCase):
                 [e["arguments"]["content"] for e in entries], ["a", "b"]
             )
 
+    def test_cross_process_order_is_by_time_not_pid(self):
+        # An older capture from a *higher*-pid process must sort before a newer
+        # capture from a *lower*-pid process. Pid-prefixed names got this wrong;
+        # a time-based prefix fixes it.
+        with TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            # Enqueue order: high pid at t=100 (older), then low pid at t=200
+            # (newer). Constant patches — os.getpid is also called internally by
+            # tempfile, so an iterator would exhaust.
+            with patch.object(spool_mod.os, "getpid", lambda: 9999999), \
+                 patch.object(spool_mod.time, "time_ns", lambda: 100):
+                spool_mod.enqueue("capture_thought", {"content": "older"}, "t1", spool_dir=d)
+            with patch.object(spool_mod.os, "getpid", lambda: 1000000), \
+                 patch.object(spool_mod.time, "time_ns", lambda: 200):
+                spool_mod.enqueue("capture_thought", {"content": "newer"}, "t2", spool_dir=d)
+            entries = [spool_mod.load(p) for p in spool_mod.pending(d)]
+            self.assertEqual(
+                [e["arguments"]["content"] for e in entries], ["older", "newer"]
+            )
+
     def test_remove(self):
         with TemporaryDirectory() as tmp:
             d = Path(tmp)

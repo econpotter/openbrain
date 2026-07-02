@@ -6,7 +6,21 @@ build-backend = "setuptools.build_meta"
 name = "openbrain"
 version = "0.1.0"
 requires-python = ">=3.11"
+# Base install = the thin client only: an MCP HTTP/JSON-RPC client plus the CLI
+# framework. Deliberately no asyncpg, embedding, or model stacks — `uv tool
+# install openbrain` on a workstation must pull none of the server's weight.
+# All heavy logic lives server-side behind the `[server]` extra below.
 dependencies = [
+    "httpx",
+    "pyyaml",
+    "typer",
+    "rich",
+]
+
+[project.optional-dependencies]
+# Server-only stack. The Dockerfile installs `.[server]`; a workstation never
+# needs it. Keep everything the MCP server, ingest CLI, and brain.py import here.
+server = [
     "fastmcp",
     "asyncpg",
     "pgvector",
@@ -14,13 +28,13 @@ dependencies = [
     "voyageai",
     "openai",
     "python-dotenv",
-    "pyyaml",
-    "typer",
-    "rich",
     "bibtexparser",
 ]
 
 [project.scripts]
+# The thin client — the only entry point base install exposes as working.
+openbrain = "openbrain.client.cli:app"
+# Server-side entry points (require the `[server]` extra to import).
 openbrain-server = "openbrain.server:main"
 openbrain-ingest = "openbrain.cli:app"
 
@@ -28,8 +42,13 @@ openbrain-ingest = "openbrain.cli:app"
 include = ["openbrain*"]
 
 [dependency-groups]
+# Dev/test/type-check needs the full server stack (tests exercise brain.py and
+# the MCP tools). Self-reference the `[server]` extra so the list stays DRY; base
+# `uv tool install openbrain` still pulls the thin client only.
 dev = [
+    "openbrain[server]",
     "mypy>=2.1.0",
+    "types-PyYAML",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ruff",

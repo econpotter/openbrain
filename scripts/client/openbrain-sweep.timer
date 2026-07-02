@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the openbrain thin-client sweep nightly
+
+[Timer]
+# Nightly capture-side sweep: flush any spooled captures and capture sessions
+# whose transcripts advanced without a Stop/PreCompact hook firing.
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

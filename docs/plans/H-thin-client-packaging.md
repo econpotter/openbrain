@@ -120,3 +120,38 @@ container is untouched.
    anywhere in the pipeline.
 7. systemd user timer installs and a manual `systemctl --user start
    openbrain-sweep.service` completes a sweep on real transcript dirs.
+
+## Live verification (2026-07-01)
+
+Verified against the real rhythm endpoint (`https://rhythm.herknet:8443/mcp`,
+config in `~/.openbrain/config.yaml`) and an ephemeral pgvector container:
+
+- **AC1** — `uv tool install .` pulls 15 thin packages (httpx/pyyaml/typer/rich +
+  transitive) with **no** server deps (asyncpg/fastmcp/voyageai/openai/pgvector
+  absent); `openbrain.client.cli` imports leak no server modules.
+- **AC2** — `openbrain capture "…zebra-quokka…"` → `Stored thought <uuid>`;
+  `search_brain` returns it at 0.82. Real MCP handshake / SSE / bearer / TLS.
+- **AC4** — `OPENBRAIN_MCP_URL` → unreachable host: `capture` and
+  `capture-transcript` both exit 0 and spool; `sweep` (server up) flushed the
+  `capture_thought` entry, which `search_brain` then found at 0.83.
+- **AC5** — `brain.summarize_transcript` calls `complete_extraction_prompt` (the
+  existing `extraction:` path); grep confirms no `subprocess`/nested `claude`.
+- **AC6** — `install-user-timer.sh` enabled `openbrain-sweep.timer`;
+  `systemctl --user start openbrain-sweep.service` → `Result=success`,
+  `ExecMainStatus=0`, completing a sweep over the real `~/.claude/projects`.
+- **AC3 (server-side)** — `scripts/trial-run-capture-transcript.py` passes all
+  checks against real asyncpg + pgvector + the #010 write path: substantive delta
+  → enriched `conversation` thought; repeat → fingerprint merge; trivial → nothing.
+
+### Deferred: AC3 live on rhythm
+
+The deployed rhythm server (v3.4.2) predates `capture_transcript` — `tools/list`
+confirms it is **not** yet deployed there (`capture_thought` is). AC3's on-rhythm
+leg (real transcript → server summary → watermark no-op on re-run) can only be
+run **after** the server image built from this branch's `.[server]` ships. The
+server-side behavior is otherwise fully proven by the trial above.
+
+**Follow-up:** post-deploy, re-run `openbrain capture-transcript <real
+transcript> --session <id> --trigger stop` twice against rhythm (second run
+reports "no new content past watermark") and one trivial transcript (stores
+nothing), and flush the one lagging `sweep` path end-to-end.

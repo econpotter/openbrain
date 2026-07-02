@@ -1749,6 +1749,14 @@ name = "openbrain"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "httpx" },
+    { name = "pyyaml" },
+    { name = "rich" },
+    { name = "typer" },
+]
+
+[package.optional-dependencies]
+server = [
     { name = "asyncpg" },
     { name = "bibtexparser" },
     { name = "fastmcp" },
@@ -1756,41 +1764,44 @@ dependencies = [
     { name = "pdfplumber" },
     { name = "pgvector" },
     { name = "python-dotenv" },
-    { name = "pyyaml" },
-    { name = "rich" },
-    { name = "typer" },
     { name = "voyageai" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "mypy" },
+    { name = "openbrain", extra = ["server"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
+    { name = "types-pyyaml" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "asyncpg" },
-    { name = "bibtexparser" },
-    { name = "fastmcp" },
-    { name = "openai" },
-    { name = "pdfplumber" },
-    { name = "pgvector" },
-    { name = "python-dotenv" },
+    { name = "asyncpg", marker = "extra == 'server'" },
+    { name = "bibtexparser", marker = "extra == 'server'" },
+    { name = "fastmcp", marker = "extra == 'server'" },
+    { name = "httpx" },
+    { name = "openai", marker = "extra == 'server'" },
+    { name = "pdfplumber", marker = "extra == 'server'" },
+    { name = "pgvector", marker = "extra == 'server'" },
+    { name = "python-dotenv", marker = "extra == 'server'" },
     { name = "pyyaml" },
     { name = "rich" },
     { name = "typer" },
-    { name = "voyageai" },
+    { name = "voyageai", marker = "extra == 'server'" },
 ]
+provides-extras = ["server"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "mypy", specifier = ">=2.1.0" },
+    { name = "openbrain", extras = ["server"] },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "ruff" },
+    { name = "types-pyyaml" },
 ]
 
 [[package]]
@@ -2872,6 +2883,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f4/8a/8dc5733b8939e7f1a71173091a6e27a1658345edbff548a0bf3f5bb26173/typer-0.26.6.tar.gz", hash = "sha256:cdbc160fe7e795b835fb6016419494a521a67bfb86b9476a1ccd0e7727d3ae5b", size = 201595, upload-time = "2026-06-02T13:47:50.536Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/30/c7/519138260db5e2fe03a509bf9e8ef6af9a514d3565c8fa74fc4fededbae1/typer-0.26.6-py3-none-any.whl", hash = "sha256:49f96d9ee5730cef607bbe155042f40b41fa4c0d0dec04990d580837493805be", size = 122464, upload-time = "2026-06-02T13:47:51.768Z" },
+]
+
+[[package]]
+name = "types-pyyaml"
+version = "6.0.12.20260518"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b8/83/4a1afc3fbfcf5b8d46fc390cd95ed6b0dc9010a265f4e9f46314efffa37a/types_pyyaml-6.0.12.20260518.tar.gz", hash = "sha256:d917f83fb38462550338c1297faedd860b3ec83912b96b1e3d73255f7473e466", size = 17850, upload-time = "2026-05-18T06:01:58.675Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/06/a2/c01db32be2ae7d6a1689972f3c492b149ee4e164b12fdfd9f64b50888215/types_pyyaml-6.0.12.20260518-py3-none-any.whl", hash = "sha256:d2150f75a231c9fe9c7463bd29487d93e60bac90400287351384bc2284eba7cd", size = 20312, upload-time = "2026-05-18T06:01:57.368Z" },
 ]
 
 [[package]]

@@ -19,12 +19,10 @@ https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CO
     && apt-get purge -y --auto-remove curl gnupg \
     && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy the rest of the application code
+# Copy the application and install the server stack. The `[server]` extra pulls
+# fastmcp/asyncpg/embedding deps; the thin-client base install never needs them.
 COPY . .
+RUN pip install --no-cache-dir .[server]
 
 # The library volume is bind-mounted here inside the container. This overrides
 # config.yaml's library_path (the host-side path used by scripts/backup.sh) so

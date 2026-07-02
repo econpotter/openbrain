@@ -5,6 +5,7 @@ __pycache__/
 *.pyo
 .env
 *.egg-info/
+build/
 dist/
 .DS_Store
 *.swp

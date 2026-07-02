@@ -15,16 +15,21 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 
 from openbrain.client.config import SPOOL_DIR
 
 
 def _new_name(index: int) -> str:
-    # Monotonic-ish, FIFO-orderable by name: pid + a per-call index. No wall
-    # clock needed for ordering; enqueue order within a process is preserved and
-    # os.getpid keeps concurrent processes from colliding.
-    return f"{os.getpid():07d}-{index:04d}.json"
+    # FIFO-orderable by name across processes: a nanosecond wall-clock stamp
+    # sorts entries by *when* they were queued, not by which pid queued them, so
+    # an older capture from a higher-pid process is never swept after a newer one
+    # from a lower-pid process. Fixed-width fields keep lexicographic sort ==
+    # chronological sort. pid + a per-call index follow the stamp only as a
+    # tiebreaker: pid keeps concurrent processes collision-free, and index
+    # preserves intra-process FIFO when two enqueues land in the same nanosecond.
+    return f"{time.time_ns():020d}-{os.getpid():07d}-{index:04d}.json"
 
 
 def enqueue(tool: str, arguments: dict, queued_at: str, spool_dir: Path = SPOOL_DIR) -> Path:

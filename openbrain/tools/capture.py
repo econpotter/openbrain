@@ -67,6 +67,45 @@ def register(mcp):
         return f"Stored thought {thought_id}"
 
     @mcp.tool
+    async def capture_transcript(
+        content: str,
+        session_id: str,
+        trigger: str,
+        source: str = "claude-code",
+    ) -> str:
+        """
+        Summarize a session-transcript delta and store the summary as memory.
+
+        The thin client sends the transcript text appended since the last
+        capture; this tool summarizes it server-side with the configured
+        extraction model and stores the summary through the standard write path
+        (bare content, type="conversation") so enrichment, embedding, and entity
+        linking happen asynchronously. Fingerprint dedup applies — a repeated
+        delta merges rather than duplicates.
+
+        A trivial or no-op delta (nothing substantive to remember) stores
+        nothing and says so.
+
+        Args:
+            content:    Transcript delta text (user/assistant turns).
+            session_id: Originating session id, recorded on the stored thought.
+            trigger:    What fired the capture: stop | auto | manual.
+            source:     Originating tool. Default "claude-code".
+        """
+        summary = await brain.summarize_transcript(content)
+        if summary is None:
+            return "No substantive content to capture (skipped)."
+
+        metadata = {
+            "type": "conversation",
+            "source": source,
+            "session_id": session_id,
+            "trigger": trigger,
+        }
+        thought_id = await brain.store_thought(summary, metadata)
+        return f"Stored conversation summary {thought_id}"
+
+    @mcp.tool
     async def remember_preference(
         content: str,
         scope: str | None = None,

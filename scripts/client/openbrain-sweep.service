@@ -1,0 +1,17 @@
+[Unit]
+Description=openbrain thin-client sweep (flush spool + capture lagging sessions)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The thin client installed by `uv tool install` lands on the user's PATH.
+# Config (OPENBRAIN_MCP_URL/KEY) comes from the environment or
+# ~/.openbrain/config.yaml; the optional env file below can carry the key.
+EnvironmentFile=-%h/.openbrain/env
+ExecStart=%h/.local/bin/openbrain sweep
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

@@ -19,7 +19,7 @@ cd "$PROJECT_DIR"
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --quiet --upgrade pip
-pip install --quiet -r requirements.txt
+pip install --quiet -e ".[server]"
 echo "      Done."
 
 # ── 2. .env ──────────────────────────────────────────────────────────────────

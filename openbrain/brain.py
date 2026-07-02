@@ -936,6 +936,48 @@ async def complete_extraction_prompt(prompt: str) -> str:
     raise RuntimeError("All extraction providers failed: " + "; ".join(errors))
 
 
+# Sentinel the summarizer returns when a transcript delta holds nothing worth
+# remembering. Matched case-insensitively so a trivial delta stores nothing.
+_TRANSCRIPT_NOTHING = "NOTHING"
+
+
+def _transcript_summary_prompt(content: str) -> str:
+    """Prompt the extraction model to distill a conversation delta.
+
+    Reuses the same ``extraction:`` model config as thought/finding extraction —
+    no new model keys, no nested assistant process. Instructs the model to emit
+    the ``NOTHING`` sentinel when the delta is trivial so a no-op transcript
+    stores nothing.
+    """
+    return (
+        "Summarize this delta from a coding-assistant session transcript into a "
+        "durable memory note: capture decisions made, problems solved, and "
+        "durable facts or constraints established. Omit routine progress, tool "
+        "output, and chatter. Write concise prose or bullets in the third "
+        "person.\n"
+        f"If there is nothing worth remembering long-term, respond with exactly: "
+        f"{_TRANSCRIPT_NOTHING}\n\n"
+        f"TRANSCRIPT DELTA:\n{content}"
+    )
+
+
+async def summarize_transcript(content: str) -> str | None:
+    """Summarize a transcript delta, or return None if it is trivial.
+
+    Returns the summary text to store, or None when the delta is empty or the
+    model judges there is nothing durable to remember. Propagates provider
+    failures (all extraction providers down) so the caller can surface an error
+    rather than silently drop the delta.
+    """
+    if not content.strip():
+        return None
+    raw = await complete_extraction_prompt(_transcript_summary_prompt(content))
+    summary = raw.strip()
+    if not summary or summary.upper() == _TRANSCRIPT_NOTHING:
+        return None
+    return summary
+
+
 async def archive_thoughts(thought_ids: list[str], extraction_run_id: str) -> None:
     if not thought_ids:
         return

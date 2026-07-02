@@ -104,6 +104,46 @@ class SpoolTests(unittest.TestCase):
             spool_mod.remove(spool_mod.pending(d)[0])
             self.assertEqual(spool_mod.depth(d), 0)
 
+    def test_enqueue_is_atomic_no_temp_leftovers(self):
+        with TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            path = spool_mod.enqueue("capture_thought", {"content": "a"}, "t1", spool_dir=d)
+            # Exactly one file exists — the final entry, no stray temp leftovers —
+            # and it is always complete, parseable JSON.
+            self.assertEqual(list(d.iterdir()), [path])
+            self.assertEqual(spool_mod.load(path)["arguments"]["content"], "a")
+
+
+class FlushSpoolTests(unittest.TestCase):
+    class _FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        def call_tool(self, tool, arguments):
+            self.calls.append((tool, arguments))
+            return {"ok": True}
+
+    def test_flush_tolerates_truncated_spool_file(self):
+        from openbrain.client import cli as cli_mod
+
+        with TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            spool_mod.enqueue("capture_thought", {"content": "a"}, "t1", spool_dir=d)
+            spool_mod.enqueue("capture_thought", {"content": "b"}, "t2", spool_dir=d)
+            # Simulate a crash mid-write: a partial JSON that sorts FIRST, so an
+            # unguarded flush would abort before reaching the valid entries.
+            (d / "0000000-0000.json").write_text('{"tool": "capture_thought", "argum')
+            client = self._FakeClient()
+            with patch.object(spool_mod, "pending", lambda *a: sorted(d.glob("*.json"))), \
+                 patch.object(spool_mod, "depth", lambda *a: len(list(d.glob("*.json")))):
+                flushed, remaining = cli_mod._flush_spool(client)
+            # Both valid entries flushed despite the malformed file up front.
+            self.assertEqual(flushed, 2)
+            self.assertEqual([c[1]["content"] for c in client.calls], ["a", "b"])
+            # The malformed file is left on disk, never silently discarded.
+            self.assertEqual(remaining, 1)
+            self.assertTrue((d / "0000000-0000.json").exists())
+
 
 class ConfigTests(unittest.TestCase):
     def test_env_wins(self):

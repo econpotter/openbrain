@@ -1,9 +1,11 @@
 ---
 name: openbrain-briefing
 description: >
-  What's on my plate - openbrain briefing plus follow-ups. Use when the user
-  asks "what's on my plate", "daily briefing", "what's due", "who needs
-  follow-up", "catch me up", or "weekly briefing".
+  What's on my plate - openbrain briefing plus follow-ups. Check FIRST when a
+  session opens or the user picks up work and you lack recent context on their
+  active projects, due items, or follow-ups — not only when they explicitly ask.
+  Also use when the user asks "what's on my plate", "daily briefing", "what's
+  due", "who needs follow-up", "catch me up", or "weekly briefing".
 ---
 
 # openbrain briefing

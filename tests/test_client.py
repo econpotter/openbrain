@@ -13,11 +13,32 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from typer.testing import CliRunner
+
+from openbrain.client import cli as cli_mod
 from openbrain.client import config as config_mod
 from openbrain.client import mcp as mcp_mod
 from openbrain.client import spool as spool_mod
 from openbrain.client import state as state_mod
 from openbrain.client import transcript as transcript_mod
+
+
+class _FakeClient:
+    """Stand-in MCP client: records tool calls and returns scripted replies."""
+
+    def __init__(self, replies):
+        self._replies = replies
+        self.calls = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def call_tool(self, name, arguments):
+        self.calls.append((name, arguments))
+        return self._replies.get(name, "")
 
 
 def _line(type_, role, content):
@@ -164,6 +185,52 @@ class PackagingGuardTests(unittest.TestCase):
         )
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("ok", out.stdout)
+
+
+class BriefCommandTests(unittest.TestCase):
+    """`openbrain brief` powers the SessionStart hook: it must emit the documented
+    additionalContext envelope on success and nothing (exit 0) on any failure."""
+
+    def _run(self, replies=None, raises=None, args=("--cwd", "/tmp/myproj")):
+        cfg = config_mod.ClientConfig(url="https://x/mcp", key="k")
+        runner = CliRunner()
+        with patch.object(cli_mod, "load_config", return_value=cfg):
+            if raises is not None:
+                with patch.object(cli_mod, "MCPClient", side_effect=raises):
+                    return runner.invoke(cli_mod.app, ["brief", *args])
+            client = _FakeClient(replies or {})
+            with patch.object(cli_mod, "MCPClient", return_value=client):
+                result = runner.invoke(cli_mod.app, ["brief", *args])
+            self._last_client = client
+            return result
+
+    def test_emits_additional_context_envelope(self):
+        result = self._run(
+            replies={"get_briefing": "BRIEFING — today", "search_brain": "THOUGHTS: ..."}
+        )
+        self.assertEqual(result.exit_code, 0)
+        payload = json.loads(result.stdout)
+        self.assertEqual(
+            payload["hookSpecificOutput"]["hookEventName"], "SessionStart"
+        )
+        ctx = payload["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("BRIEFING — today", ctx)
+        self.assertIn("THOUGHTS: ...", ctx)
+
+    def test_recall_query_inferred_from_cwd(self):
+        self._run(replies={"get_briefing": "b", "search_brain": "r"})
+        search_calls = [a for name, a in self._last_client.calls if name == "search_brain"]
+        self.assertEqual(search_calls, [{"query": "myproj"}])
+
+    def test_no_content_emits_nothing(self):
+        result = self._run(replies={"get_briefing": "", "search_brain": ""})
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout.strip(), "")
+
+    def test_server_failure_is_silent(self):
+        result = self._run(raises=mcp_mod.MCPError("tunnel down"))
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout.strip(), "")
 
 
 if __name__ == "__main__":

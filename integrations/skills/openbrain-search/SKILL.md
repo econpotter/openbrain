@@ -1,9 +1,11 @@
 ---
 name: openbrain-search
 description: >
-  Search openbrain memory and document library. Use when the user asks "what do
-  I know about", "search openbrain", "search the brain", "find in my notes", or
-  "did I capture anything about".
+  Search openbrain memory and document library. Check FIRST when starting work
+  on a project or topic, or when the user references past context, a decision, or
+  a document you do not have in this session — not only when they explicitly ask.
+  Also use when the user asks "what do I know about", "search openbrain", "search
+  the brain", "find in my notes", or "did I capture anything about".
 ---
 
 # openbrain search

@@ -11,12 +11,17 @@ route common requests to the right openbrain MCP tools.
 ```
 integrations/
   README.md
-  skills/
+  skills/                       # canonical, provider-neutral skill sources
     openbrain-capture/SKILL.md
     openbrain-ingest/SKILL.md
     openbrain-search/SKILL.md
     openbrain-briefing/SKILL.md
     openbrain-extraction/SKILL.md
+  claude-code/                  # Claude Code plugin (MCP + skills + hooks)
+    .claude-plugin/plugin.json
+    .mcp.json
+    hooks/hooks.json
+    skills/ -> ../../skills/*   # symlinks to the canonical sources
 ```
 
 ## Skills
@@ -55,4 +60,11 @@ point the client at `python -m openbrain.server`.
 
 ## Installing
 
-Copy or link to your preferred skill location.
+- **Claude Code** — install the bundled plugin, which registers the MCP server,
+  loads these skills as `openbrain:*`, and wires the SessionStart / Stop /
+  PreCompact hooks in one step. See `claude-code/README.md`.
+- **Codex / Cursor** — run `scripts/install_assistant_integrations.py`, or copy
+  or link the `skills/` dirs to your preferred skill location.
+
+The `claude-code/skills/` directory symlinks back to `skills/` here, so this
+stays the single canonical source for every provider.

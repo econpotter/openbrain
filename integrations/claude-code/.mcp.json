@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "openbrain": {
+      "type": "http",
+      "url": "${OPENBRAIN_MCP_URL:-https://rhythm.herknet:8443/mcp}",
+      "headers": {
+        "Authorization": "Bearer ${OPENBRAIN_MCP_KEY}"
+      }
+    }
+  }
+}

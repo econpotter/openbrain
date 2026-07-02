@@ -35,16 +35,17 @@ for your Codex build.
 
 ## Claude Code
 
-`claude-code-hooks.json` uses Claude Code's direct settings format for
-`~/.claude/settings.json`, not the plugin `{"hooks": ...}` wrapper format. It
-uses prompt hooks for `UserPromptSubmit`, `PreCompact`, and `SessionEnd`,
-because those are the events where Claude Code prompt hooks can re-enter the
-agent with context or preserve state before compaction and shutdown.
+Claude Code is handled by the bundled plugin, not by a template here. The old
+prompt-type template (`claude-code-hooks.json`) was retired: prompt hooks are
+decision evaluators with no MCP tool access, so they could never call
+`capture_thought`, and `SessionEnd` fires after the turn is over with nothing
+left to inject.
 
-If you install it in a plugin `hooks/hooks.json`, wrap the object in a top-level
-`{"hooks": ...}` object. If your Claude Code installation does not support
-prompt hooks, use global `~/.claude/CLAUDE.md`, project `CLAUDE.md`, or
-Claude.ai project instructions instead.
+The plugin under `integrations/claude-code/` uses `"type": "command"` hooks that
+call the thin `openbrain` CLI: `SessionStart` push-recall (briefing + recall as
+`additionalContext`) and `Stop` / `PreCompact` capture. Install it via the
+repo-root `.claude-plugin/marketplace.json`; see
+`integrations/claude-code/README.md`.
 
 ## Custom Harnesses
 

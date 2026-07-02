@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Install openbrain hooks + skills into user-level Claude Code, Codex, and Cursor configs.
+"""Install openbrain hooks + skills into user-level Codex and Cursor configs.
+
+Claude Code is NOT handled here: it installs via the bundled Claude Code plugin
+(`integrations/claude-code/`, listed in the repo-root `.claude-plugin/
+marketplace.json`), which registers the MCP server, skills, and lifecycle hooks
+in one `enabledPlugins` entry. See `integrations/claude-code/README.md`.
 
 Idempotent: re-running skips entries already present and only backs up
 files it actually modifies (to <file>.bak).
@@ -15,7 +20,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 INTEGRATIONS = REPO_ROOT / "integrations"
 SKILLS_SRC = INTEGRATIONS / "skills"
 
-CLAUDE_HOOKS = REPO_ROOT / "docs" / "hooks" / "claude-code-hooks.json"
 CODEX_HOOKS = REPO_ROOT / "docs" / "hooks" / "codex-hooks.json"
 
 HOME = Path.home()
@@ -35,44 +39,6 @@ def load_json(path: Path) -> dict:
 def write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n")
-
-
-def hook_signature(hook: dict) -> str:
-    """A value that identifies a hook entry regardless of wrapper key (prompt/command)."""
-    if "prompt" in hook:
-        prompt = hook["prompt"]
-        text = "".join(prompt) if isinstance(prompt, list) else str(prompt)
-        return text[:60]
-    return json.dumps(hook, sort_keys=True)
-
-
-def merge_claude_hooks() -> bool:
-    settings_path = HOME / ".claude" / "settings.json"
-    incoming = load_json(CLAUDE_HOOKS)
-    settings = load_json(settings_path)
-    settings.setdefault("hooks", {})
-
-    changed = False
-    for event, groups in incoming.items():
-        existing_groups = settings["hooks"].setdefault(event, [])
-        existing_sigs = {
-            hook_signature(h) for g in existing_groups for h in g.get("hooks", [])
-        }
-        for group in groups:
-            new_hooks = [
-                h
-                for h in group.get("hooks", [])
-                if hook_signature(h) not in existing_sigs
-            ]
-            if not new_hooks:
-                continue
-            existing_groups.append({**group, "hooks": new_hooks})
-            changed = True
-
-    if changed:
-        backup(settings_path)
-        write_json(settings_path, settings)
-    return changed
 
 
 def is_openbrain_entry(entry: dict) -> bool:
@@ -104,9 +70,11 @@ def merge_codex_hooks() -> bool:
 
 def copy_skills() -> list[str]:
     """Copy each integrations/skills/<name> dir into the user-level skills
-    directory of each assistant. Returns list of skill names (re)installed."""
+    directory of each assistant. Returns list of skill names (re)installed.
+
+    Claude Code is intentionally absent: it loads these skills through the
+    bundled plugin's `skills/` directory, not a copied `custom-skills/` dir."""
     targets = {
-        "claude": HOME / ".claude" / "skills" / "custom-skills",
         "codex": HOME / ".codex" / "skills" / "custom-skills",
         "cursor": HOME / ".cursor" / "skills-cursor",
     }
@@ -124,13 +92,12 @@ def copy_skills() -> list[str]:
 
 
 def main() -> None:
-    claude_changed = merge_claude_hooks()
     codex_changed = merge_codex_hooks()
     skills = copy_skills()
 
-    print(f"Claude Code hooks: {'updated' if claude_changed else 'already up to date'}")
+    print("Claude Code:       install via the plugin (integrations/claude-code/README.md)")
     print(f"Codex hooks:       {'updated' if codex_changed else 'already up to date'}")
-    print(f"Skills installed/updated for claude, codex, cursor: {', '.join(skills)}")
+    print(f"Skills installed/updated for codex, cursor: {', '.join(skills)}")
 
 
 if __name__ == "__main__":

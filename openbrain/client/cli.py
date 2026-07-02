@@ -170,8 +170,12 @@ def brief(
 ):
     """Print a briefing plus project-relevant recall (SessionStart context).
 
-    One round trip, short timeout. On any failure prints nothing and exits 0 so a
-    SessionStart hook injects empty additionalContext rather than an error.
+    Emits the documented Claude Code SessionStart hook shape on stdout —
+    `{"hookSpecificOutput": {"hookEventName": "SessionStart",
+    "additionalContext": ...}}` — so the briefing and project-relevant recall are
+    injected into the session as context (push recall). One round trip, short
+    timeout. On any failure prints nothing and exits 0 so the hook injects no
+    context rather than surfacing an error.
     """
     hook = _read_hook_stdin()
     scope = cwd or hook.get("cwd")
@@ -188,7 +192,19 @@ def brief(
 
     blocks = [b for b in (briefing.strip(), recall.strip()) if b]
     if blocks:
-        console.print("\n\n".join(blocks))
+        # Raw stdout (typer.echo, not the rich Console): the SessionStart hook
+        # parses this as JSON, and recall text can contain markup-like brackets
+        # (e.g. "[2026-07-01]") that rich would mangle or wrap.
+        typer.echo(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "SessionStart",
+                        "additionalContext": "\n\n".join(blocks),
+                    }
+                }
+            )
+        )
     raise typer.Exit(0)
 
 

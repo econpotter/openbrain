@@ -21,17 +21,21 @@ copy outside the repository.
 
 ## Codex
 
-`codex-hooks.json` uses a Codex-like prompt hook shape with
-`session_start`, `user_prompt_submit`, `pre_compact`, and `session_end`
-events. If your Codex build supports this schema, place an adapted copy where
-Codex loads hooks, commonly a global file such as:
+Codex is handled by the installer, not by a template here. The old prompt-type
+template (`codex-hooks.json`) was retired for the same reason the Claude Code one
+was: prompt hooks are decision evaluators with no MCP tool access, so they could
+never call `capture_thought`.
 
-```text
-~/.codex/hooks.json
-```
+Codex uses Claude Code's hook schema — command-type entries under a top-level
+`{"hooks": {...}}` object, PascalCase event names. The canonical template lives
+at `integrations/codex/hooks.json`: `SessionStart` push-recall (`openbrain
+brief`) plus `Stop` / `PreCompact` capture (`openbrain capture-transcript
+--source codex`).
 
-Do not copy a template blindly. First confirm the hook schema and payload format
-for your Codex build.
+Run `scripts/install_assistant_integrations.py` to install it. The installer
+merges the hooks into `~/.codex/hooks.json`, registers the MCP server in
+`~/.codex/config.toml`, and copies the skills — all idempotent. Do not symlink
+this repo's directory into a Codex config path.
 
 ## Claude Code
 

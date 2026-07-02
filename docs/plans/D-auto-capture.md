@@ -71,7 +71,8 @@ Hooks make auto-capture more reliable than instructions alone.
 
 Use `docs/hooks/` as copyable source material:
 
-- `codex-hooks.json` — prompt template for Codex-like lifecycle hooks.
+- Codex — retired the prompt-type template; Codex now installs command-type
+  hooks + MCP + skills via `scripts/install_assistant_integrations.py` (Plan J).
 - `claude-code-hooks.json` — prompt template for Claude Code settings hooks.
 - `teardown-prompt.md` — final prompt for custom CLI or script harnesses.
 - `README.md` — install notes and caveats.

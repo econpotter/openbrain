@@ -235,23 +235,58 @@ injected context. See `integrations/claude-code/README.md` for details and for
 migrating off the old install path (stale `~/.claude/skills/custom-skills/openbrain-*`
 copies and hand-merged prompt hooks).
 
+#### Codex (CLI)
+
+Codex reaches the same effective behavior as the Claude Code plugin — MCP tools,
+`openbrain-*` skills, SessionStart push-recall, Stop/PreCompact capture — through
+a config-merge installer rather than a plugin bundle.
+
+1. **Thin client CLI** — same as Claude Code, the hooks shell out to it:
+
+   ```bash
+   uv tool install openbrain            # from PyPI once published, or:
+   uv tool install /path/to/openbrain   # from this checkout
+   ```
+
+2. **Bearer token + endpoint** — the *only* client-side env var Codex needs is
+   `OPENBRAIN_MCP_KEY`, the same value Claude Code uses. Export it in your shell
+   profile (optionally `OPENBRAIN_MCP_URL` to override the default endpoint):
+
+   ```bash
+   export OPENBRAIN_MCP_KEY="<your-mcp-access-key>"
+   export OPENBRAIN_MCP_URL="https://<your-hostname>:8443/mcp"   # optional
+   ```
+
+3. **Run the installer** — idempotent and self-healing (it fixes a stale MCP
+   `bearer_token_env_var` and never touches an unrelated project's hook entries):
+
+   ```bash
+   python scripts/install_assistant_integrations.py   # or: just install-integrations
+   ```
+
+   It writes `[mcp_servers.openbrain]` into `~/.codex/config.toml`, merges the
+   command-type hooks into `~/.codex/hooks.json`, and copies the skills. Start a
+   fresh Codex session: the openbrain MCP tools are available and the
+   SessionStart briefing appears as injected context.
+
 #### Auto-capture instructions
 
-**Claude Code needs nothing here** — the plugin above already does session-start
-recall and session-end/PreCompact capture via lifecycle hooks. For every *other*
-agent, install the instruction text from `docs/agent-instructions/auto-capture.md`
-into its global or project-level instructions.
+**Claude Code and Codex need nothing here** — their installers above already do
+session-start recall and session-end/PreCompact capture via lifecycle hooks. For
+every *other* agent, install the instruction text from
+`docs/agent-instructions/auto-capture.md` into its global or project-level
+instructions.
 
 Common targets:
 
-- Codex global: `~/.codex/AGENTS.md`
 - Repo-local: `AGENTS.md` or `CLAUDE.md`
 - Claude.ai web: project instructions or custom instructions
 - Custom harnesses: the system or developer prompt builder
 
-For non-Claude-Code clients that support lifecycle hooks, adapt the templates in
-`docs/hooks/`. Hooks are the more reliable layer for session-start recall and
-session-end capture; instructions alone depend on the agent remembering to act.
+For clients that support lifecycle hooks but lack an installer path here, adapt
+the templates in `docs/hooks/`. Hooks are the more reliable layer for
+session-start recall and session-end capture; instructions alone depend on the
+agent remembering to act.
 
 ## Manual deployment (without the installer)
 

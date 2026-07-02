@@ -112,14 +112,27 @@ One `enabledPlugins` entry replaces the three config surfaces the old installer
 poked (hooks merge, skills copy, MCP registration) and eliminates the drift that
 caused failure 1 and half of failure 2.
 
-## Other providers (deferred — future Plan J)
+## Other providers
 
 The provider-agnostic layer is the MCP server + thin CLI, not the plugin.
-Adapters are thin config merges: Codex (`~/.codex/config.toml` MCP block +
-skills dir + AGENTS.md line), Cursor (`~/.cursor/mcp.json` + rules file,
-recall-only — no hook lifecycle). The nightly transcript sweep gives capture
-coverage even on providers with no hooks. Not queued yet; revisit after the
-Claude Code path is proven live.
+Adapters are thin config merges.
+
+**Codex — done, no longer deferred.** Plan J brought Codex to Claude-Code
+parity (MCP block in `~/.codex/config.toml` + command-type hooks in
+`~/.codex/hooks.json` + skills dir), all via
+`scripts/install_assistant_integrations.py`. Codex uses Claude Code's hook
+schema; only the transcript *content* parser differs. See
+`docs/design/2026-07-02-codex-adapter.md`.
+
+**Cursor — deferred by choice, not capability.** The earlier "recall-only —
+no hook lifecycle" claim here is stale: Cursor shipped real command hooks
+(`sessionStart`, `stop`, `preCompact`) after this doc was written. When picked
+up, re-verify against live Cursor docs; its transcript/output schema differs
+from both Claude's and Codex's (flat `additional_context`, no
+`hookSpecificOutput` wrapper; `conversation_id` instead of `session_id`).
+
+The nightly transcript sweep gives capture coverage even on providers with no
+hooks.
 
 ## Consequences for existing work
 

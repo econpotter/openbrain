@@ -45,6 +45,21 @@ def _line(type_, role, content):
     return json.dumps({"type": type_, "message": {"role": role, "content": content}})
 
 
+def _codex_msg(role, text, block_type="input_text"):
+    """One Codex `response_item` message line, matching the real schema."""
+    return json.dumps(
+        {
+            "timestamp": "2026-06-22T17:23:41.041Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": role,
+                "content": [{"type": block_type, "text": text}],
+            },
+        }
+    )
+
+
 class TranscriptDeltaTests(unittest.TestCase):
     def _write(self, tmp, lines):
         p = Path(tmp) / "t.jsonl"
@@ -92,6 +107,47 @@ class TranscriptDeltaTests(unittest.TestCase):
             delta = transcript_mod.read_delta(p, 1)
             self.assertEqual(delta.text, "")
             self.assertEqual(delta.total_lines, 1)
+
+
+class CodexTranscriptTests(unittest.TestCase):
+    """Codex JSONL has its own schema: `response_item` -> `payload` message with
+    `input_text`/`output_text` blocks. Only user/assistant survive; `developer`
+    boilerplate (injected AGENTS.md every turn) is dropped."""
+
+    def _write(self, tmp, lines):
+        p = Path(tmp) / "rollout-2026-06-22T17-23-40-abc.jsonl"
+        p.write_text("\n".join(lines) + "\n")
+        return p
+
+    def test_extracts_user_and_assistant_excludes_developer(self):
+        with TemporaryDirectory() as tmp:
+            lines = [
+                json.dumps({"type": "session_meta", "payload": {"id": "x"}}),
+                _codex_msg("developer", "<permissions instructions> ... boilerplate"),
+                _codex_msg("user", "please fix the parser"),
+                _codex_msg("assistant", "Fixed the Codex branch.", "output_text"),
+                json.dumps({"type": "turn_context", "payload": {}}),
+            ]
+            p = self._write(tmp, lines)
+            delta = transcript_mod.read_delta(p, 0)
+            self.assertEqual(
+                delta.text,
+                "user: please fix the parser\n\nassistant: Fixed the Codex branch.",
+            )
+            self.assertNotIn("boilerplate", delta.text)
+            self.assertNotIn("permissions", delta.text)
+            self.assertEqual(delta.total_lines, 5)
+
+    def test_unrecognized_line_is_fail_soft(self):
+        with TemporaryDirectory() as tmp:
+            lines = [
+                "not json at all",
+                json.dumps({"type": "response_item", "payload": {"type": "reasoning"}}),
+                _codex_msg("user", "still captured"),
+            ]
+            p = self._write(tmp, lines)
+            delta = transcript_mod.read_delta(p, 0)
+            self.assertEqual(delta.text, "user: still captured")
 
 
 class StateTests(unittest.TestCase):
@@ -184,6 +240,43 @@ class FlushSpoolTests(unittest.TestCase):
             # The malformed file is left on disk, never silently discarded.
             self.assertEqual(remaining, 1)
             self.assertTrue((d / "0000000-0000.json").exists())
+
+
+class SweepSourceLabelTests(unittest.TestCase):
+    """One sweep pass must tag Codex and Claude Code sessions with distinct
+    sources, driven by the {source_label: dir} mapping (criterion 4)."""
+
+    def test_each_dir_tags_its_own_source(self):
+        client = _FakeClient({})
+        with TemporaryDirectory() as tmp:
+            claude_dir = Path(tmp) / "claude"
+            codex_dir = Path(tmp) / "codex"
+            claude_dir.mkdir()
+            codex_dir.mkdir()
+            (claude_dir / "sess-c.jsonl").write_text(
+                _line("user", "user", "claude side work") + "\n"
+            )
+            (codex_dir / "rollout-x.jsonl").write_text(
+                _codex_msg("user", "codex side work") + "\n"
+            )
+            with patch.object(cli_mod.state, "get_watermark", return_value=0), \
+                 patch.object(cli_mod.state, "set_watermark"):
+                captured = cli_mod._sweep_transcripts(
+                    client, {"claude-code": claude_dir, "codex": codex_dir}
+                )
+        self.assertEqual(captured, 2)
+        by_session = {a["session_id"]: a["source"] for _, a in client.calls}
+        self.assertEqual(by_session["sess-c"], "claude-code")
+        self.assertEqual(by_session["rollout-x"], "codex")
+
+    def test_default_dirs_are_a_labeled_mapping(self):
+        # The nightly cron runs `openbrain sweep` with no args → both providers.
+        self.assertEqual(
+            set(cli_mod.DEFAULT_TRANSCRIPT_DIRS), {"claude-code", "codex"}
+        )
+        self.assertTrue(
+            str(cli_mod.DEFAULT_TRANSCRIPT_DIRS["codex"]).endswith(".codex/sessions")
+        )
 
 
 class ConfigTests(unittest.TestCase):

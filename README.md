@@ -198,53 +198,60 @@ If you set `MCP_ACCESS_KEY`, configure the connector to send it as a Bearer toke
 
 #### Claude Code (CLI)
 
-If you set `MCP_ACCESS_KEY`, pass the same value as a Bearer token:
+Claude Code uses the bundled **openbrain plugin**: one `enabledPlugins` entry
+gives every session — in any directory — the openbrain MCP tools, the
+`openbrain:*` skills, SessionStart push-recall, and Stop/PreCompact capture. It
+replaces the old manual `claude mcp add` registration and the prompt-type hooks.
 
-```bash
-claude mcp add --transport http \
-  --header "Authorization: Bearer <your-mcp-access-key>" \
-  openbrain https://<your-hostname>:8443/mcp
-```
+1. **Thin client CLI** — the plugin's hooks shell out to it, so it must be on
+   `PATH`:
 
-To add the server through JSON configuration instead:
+   ```bash
+   uv tool install openbrain            # from PyPI once published, or:
+   uv tool install /path/to/openbrain   # from this checkout
+   ```
 
-```json
-{
-  "mcpServers": {
-    "openbrain": {
-      "type": "http",
-      "url": "https://<your-hostname>:8443/mcp",
-      "headers": {
-        "Authorization": "Bearer <your-mcp-access-key>"
-      }
-    }
-  }
-}
-```
+2. **Bearer token + endpoint** — read from the environment, never committed.
+   Export them where Claude Code (and the hook shells) can see them, e.g. in your
+   shell profile:
 
-Then verify the connection:
+   ```bash
+   export OPENBRAIN_MCP_KEY="<your-mcp-access-key>"              # same value as MCP_ACCESS_KEY
+   export OPENBRAIN_MCP_URL="https://<your-hostname>:8443/mcp"   # optional; defaults to the tunnel URL
+   # export OPENBRAIN_MCP_INSECURE=1                             # only for a self-signed internal endpoint
+   ```
 
-```bash
-claude mcp list
-```
+3. **Add the marketplace and install the plugin** (this repo doubles as its own
+   marketplace via `.claude-plugin/marketplace.json`):
+
+   ```
+   /plugin marketplace add /path/to/openbrain      # or the GitHub owner/repo
+   /plugin install openbrain@openbrain
+   ```
+
+Start a fresh session in any project directory: the `openbrain` MCP tools and
+`openbrain:*` skills are present, and the SessionStart briefing appears as
+injected context. See `integrations/claude-code/README.md` for details and for
+migrating off the old install path (stale `~/.claude/skills/custom-skills/openbrain-*`
+copies and hand-merged prompt hooks).
 
 #### Auto-capture instructions
 
-To make agents preserve useful memories automatically, install the instruction
-text from `docs/agent-instructions/auto-capture.md` into the global or
-project-level instructions for each agent you use.
+**Claude Code needs nothing here** — the plugin above already does session-start
+recall and session-end/PreCompact capture via lifecycle hooks. For every *other*
+agent, install the instruction text from `docs/agent-instructions/auto-capture.md`
+into its global or project-level instructions.
 
 Common targets:
 
 - Codex global: `~/.codex/AGENTS.md`
-- Claude Code global: `~/.claude/CLAUDE.md`
 - Repo-local: `AGENTS.md` or `CLAUDE.md`
 - Claude.ai web: project instructions or custom instructions
 - Custom harnesses: the system or developer prompt builder
 
-For clients that support lifecycle hooks, adapt the templates in `docs/hooks/`.
-Hooks are the more reliable layer for session-start recall and session-end
-capture; instructions alone depend on the agent remembering to act.
+For non-Claude-Code clients that support lifecycle hooks, adapt the templates in
+`docs/hooks/`. Hooks are the more reliable layer for session-start recall and
+session-end capture; instructions alone depend on the agent remembering to act.
 
 ## Manual deployment (without the installer)
 

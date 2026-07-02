@@ -1,10 +1,20 @@
-"""Parse Claude Code transcript JSONL and extract the conversation delta.
+"""Parse assistant transcript JSONL and extract the conversation delta.
 
 A transcript is one JSON object per line. Only `user` and `assistant` message
 lines carry conversation text; everything else (mode/permission/attachment/
-tool_use/tool_result/thinking) is control or machine noise and is dropped from
-the summarization delta. The watermark is a line count per session, so re-runs
-process only lines appended since the last acknowledged capture.
+tool_use/tool_result/thinking, plus Codex's per-turn `developer` boilerplate) is
+control or machine noise and is dropped from the summarization delta. The
+watermark is a line count per session, so re-runs process only lines appended
+since the last acknowledged capture.
+
+Two providers are recognized and auto-detected per line by shape, so a single
+sweep pass can mix both kinds of transcript on disk:
+
+- Claude Code: a flat line, `{"type": "user"|"assistant", "message": {...}}`.
+- Codex: `{"type": "response_item", "payload": {"type": "message", "role":
+  "user"|"assistant"|"developer", "content": [{"type": "input_text"|
+  "output_text", "text": ...}]}}`. The `developer` role carries injected
+  AGENTS.md/system boilerplate on every turn and is excluded.
 """
 
 from __future__ import annotations
@@ -35,13 +45,8 @@ def _text_from_message(msg: dict) -> str:
     return ""
 
 
-def _line_text(line: str) -> str:
-    try:
-        obj = json.loads(line)
-    except json.JSONDecodeError:
-        return ""
-    if obj.get("type") not in ("user", "assistant"):
-        return ""
+def _claude_line_text(obj: dict) -> str:
+    """Extract text from a Claude Code line: flat type + sibling message dict."""
     msg = obj.get("message")
     if not isinstance(msg, dict):
         return ""
@@ -50,6 +55,53 @@ def _line_text(line: str) -> str:
     if not body:
         return ""
     return f"{role}: {body}"
+
+
+def _codex_line_text(obj: dict) -> str:
+    """Extract text from a Codex `response_item` message line.
+
+    Keeps only user/assistant roles (drops `developer` boilerplate) and joins the
+    `input_text`/`output_text` content blocks.
+    """
+    payload = obj.get("payload")
+    if not isinstance(payload, dict) or payload.get("type") != "message":
+        return ""
+    role = payload.get("role")
+    if role not in ("user", "assistant"):
+        return ""
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return ""
+    parts = [
+        str(block.get("text", "")).strip()
+        for block in content
+        if isinstance(block, dict) and block.get("type") in ("input_text", "output_text")
+    ]
+    body = "\n".join(p for p in parts if p)
+    if not body:
+        return ""
+    return f"{role}: {body}"
+
+
+def _line_text(line: str) -> str:
+    """Return one line's conversation text, auto-detecting the provider shape.
+
+    Unparseable or unrecognized lines contribute empty text; never raises, so a
+    stray line shape can never abort a capture.
+    """
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(obj, dict):
+        return ""
+    # Claude Code: flat user/assistant line with a sibling `message` dict.
+    if obj.get("type") in ("user", "assistant") and isinstance(obj.get("message"), dict):
+        return _claude_line_text(obj)
+    # Codex: a `response_item` wrapping a `payload` message.
+    if obj.get("type") == "response_item":
+        return _codex_line_text(obj)
+    return ""
 
 
 def read_delta(transcript_path: str | Path, watermark: int) -> Delta:

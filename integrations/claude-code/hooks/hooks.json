@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "openbrain capture-transcript --trigger stop",
+            "command": "openbrain capture-transcript --trigger stop --source claude-code",
             "timeout": 15
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "openbrain capture-transcript --trigger auto",
+            "command": "openbrain capture-transcript --trigger auto --source claude-code",
             "timeout": 15
           }
         ]
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "openbrain capture-transcript --trigger manual",
+            "command": "openbrain capture-transcript --trigger manual --source claude-code",
             "timeout": 15
           }
         ]

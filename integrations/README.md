@@ -22,6 +22,8 @@ integrations/
     .mcp.json
     hooks/hooks.json
     skills/ -> ../../skills/*   # symlinks to the canonical sources
+  codex/                        # Codex command-type hook template (installer source)
+    hooks.json
 ```
 
 ## Skills
@@ -63,8 +65,14 @@ point the client at `python -m openbrain.server`.
 - **Claude Code** — install the bundled plugin, which registers the MCP server,
   loads these skills as `openbrain:*`, and wires the SessionStart / Stop /
   PreCompact hooks in one step. See `claude-code/README.md`.
-- **Codex / Cursor** — run `scripts/install_assistant_integrations.py`, or copy
-  or link the `skills/` dirs to your preferred skill location.
+- **Codex** — run `scripts/install_assistant_integrations.py`. It registers the
+  MCP server in `~/.codex/config.toml`, wires the command-type SessionStart /
+  Stop / PreCompact hooks in `~/.codex/hooks.json`, and copies these skills —
+  the same effective behavior as the Claude Code plugin. Only
+  `OPENBRAIN_MCP_KEY` needs to be exported.
+- **Cursor** — the same installer copies the skills; hooks and MCP are deferred
+  by choice (see `docs/design/2026-07-02-codex-adapter.md`). Or copy/link the
+  `skills/` dirs to your preferred skill location.
 
 The `claude-code/skills/` directory symlinks back to `skills/` here, so this
 stays the single canonical source for every provider.

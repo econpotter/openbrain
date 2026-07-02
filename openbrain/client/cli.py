@@ -33,7 +33,28 @@ console = Console()
 # stderr for diagnostics; stdout stays clean for hook additionalContext capture.
 err = Console(stderr=True)
 
-DEFAULT_TRANSCRIPT_DIRS = [Path.home() / ".claude" / "projects"]
+# Ordered {source_label: transcript root}. Each swept directory tags its own
+# captures with the matching source, so one sweep pass labels Claude Code and
+# Codex sessions distinctly. The parser (transcript.py) auto-detects the line
+# shape regardless; the label is the naming/analytics side.
+DEFAULT_TRANSCRIPT_DIRS: dict[str, Path] = {
+    "claude-code": Path.home() / ".claude" / "projects",
+    "codex": Path.home() / ".codex" / "sessions",
+}
+
+
+def _source_for_dir(base: Path) -> str:
+    """Best-effort source label for an explicitly-passed sweep directory.
+
+    Reverse-matches the known default roots; falls back to `codex` for a
+    `.codex` path and `claude-code` otherwise. The parser tells the transcripts
+    apart by shape either way, so this only affects the analytics label.
+    """
+    resolved = base.expanduser().resolve()
+    for label, known in DEFAULT_TRANSCRIPT_DIRS.items():
+        if resolved == known.expanduser().resolve():
+            return label
+    return "codex" if ".codex" in resolved.parts else "claude-code"
 
 
 def _now() -> str:
@@ -114,22 +135,30 @@ def capture_transcript(
     transcript_path: str = typer.Argument(None, help="Path to the transcript JSONL"),
     session: str = typer.Option(None, "--session", help="Session id (watermark key)"),
     trigger: str = typer.Option(None, "--trigger", help="stop|auto|manual"),
+    source: str = typer.Option(None, "--source", help="Provider label: claude-code|codex"),
 ):
     """Capture the transcript delta past this session's watermark.
 
     Reads the appended lines, sends them to the server's capture_transcript tool,
     and advances the watermark once the delta is durably captured (server ack or
-    spool). Accepts Claude Code hook JSON on stdin so a hook body needs no
-    argument plumbing.
+    spool). Accepts hook JSON on stdin (Claude Code or Codex — same fields) so a
+    hook body needs no argument plumbing.
     """
     hook = _read_hook_stdin()
     path = transcript_path or hook.get("transcript_path")
     session_id = session or hook.get("session_id")
     trig = trigger or hook.get("hook_event_name") or "manual"
+    src = source or hook.get("source")
 
     if not path or not session_id:
         err.print("capture-transcript: need a transcript path and session id.")
         raise typer.Exit(0)  # fail soft — never break a hook
+    if not src:
+        # No source label: refuse loudly rather than silently mislabel the
+        # capture (Codex thoughts stamped claude-code, or vice versa). Every
+        # shipped hook passes --source; this only trips a hand-rolled one.
+        err.print("capture-transcript: need a --source label (e.g. claude-code|codex).")
+        raise typer.Exit(0)
     if not Path(path).expanduser().exists():
         err.print(f"capture-transcript: transcript not found: {path}")
         raise typer.Exit(0)
@@ -146,7 +175,7 @@ def capture_transcript(
         "content": delta.text,
         "session_id": session_id,
         "trigger": trig,
-        "source": hook.get("source", "claude-code"),
+        "source": src,
     }
     online, message = _capture_or_spool("capture_transcript", arguments)
     # Advance the watermark once the delta is durably committed — server ack
@@ -229,10 +258,15 @@ def _flush_spool(client: MCPClient) -> tuple[int, int]:
     return flushed, spool.depth()
 
 
-def _sweep_transcripts(client: MCPClient, dirs: list[Path]) -> int:
-    """Capture any session whose watermark lags its transcript. Returns captures."""
+def _sweep_transcripts(client: MCPClient, dirs: dict[str, Path]) -> int:
+    """Capture any session whose watermark lags its transcript. Returns captures.
+
+    `dirs` maps a source label to a transcript root; each swept directory tags
+    its captures with its own label so Codex and Claude Code sessions stay
+    distinct in a single pass.
+    """
     captured = 0
-    for base in dirs:
+    for source_label, base in dirs.items():
         base = base.expanduser()
         if not base.exists():
             continue
@@ -251,7 +285,7 @@ def _sweep_transcripts(client: MCPClient, dirs: list[Path]) -> int:
                         "content": delta.text,
                         "session_id": session_id,
                         "trigger": "sweep",
-                        "source": "claude-code",
+                        "source": source_label,
                     },
                 )
             except (MCPError, MCPToolError) as exc:
@@ -269,7 +303,10 @@ def sweep(
     ),
 ):
     """Flush the spool, then capture any lagging session. Idempotent."""
-    dirs = [Path(d) for d in transcript_dirs] if transcript_dirs else DEFAULT_TRANSCRIPT_DIRS
+    if transcript_dirs:
+        dirs = {_source_for_dir(Path(d)): Path(d) for d in transcript_dirs}
+    else:
+        dirs = DEFAULT_TRANSCRIPT_DIRS
     try:
         cfg = load_config()
     except ConfigError as exc:

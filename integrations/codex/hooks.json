@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "openbrain capture-transcript --trigger stop --source codex",
+            "command": "openbrain capture-transcript --trigger stop --source codex --quiet",
             "timeout": 15
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "openbrain capture-transcript --trigger auto --source codex",
+            "command": "openbrain capture-transcript --trigger auto --source codex --quiet",
             "timeout": 15
           }
         ]
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "openbrain capture-transcript --trigger manual --source codex",
+            "command": "openbrain capture-transcript --trigger manual --source codex --quiet",
             "timeout": 15
           }
         ]

@@ -9,7 +9,6 @@ tools/driver.py); the relevance gate and research agenda are the driver's, not
 openbrain's.
 """
 
-import asyncio
 import json
 
 from openbrain import brain, papers
@@ -69,8 +68,7 @@ def register(mcp):
     async def list_concepts(term: str) -> str:
         """Look up OpenAlex concepts matching `term` (with work counts) so a query
         is expanded with real index vocabulary, not guessed synonyms."""
-        loop = asyncio.get_event_loop()
-        found = await loop.run_in_executor(None, lambda: papers.concepts(term))
+        found = await brain.run_blocking(lambda: papers.concepts(term))
         return json.dumps(found, indent=2, default=str)
 
     @mcp.tool

@@ -435,8 +435,10 @@ async def _refresh_mentioned_entities(people: list[str], projects: list[str]) ->
         for row in rows:
             try:
                 await _refresh_entity_embedding("people", str(row["id"]))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Failed to refresh people embedding for %s: %s", row["id"], exc
+                )
     for name in projects:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
@@ -445,8 +447,10 @@ async def _refresh_mentioned_entities(people: list[str], projects: list[str]) ->
         for row in rows:
             try:
                 await _refresh_entity_embedding("projects", str(row["id"]))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Failed to refresh projects embedding for %s: %s", row["id"], exc
+                )
 
 
 async def add_link(
@@ -613,6 +617,34 @@ async def refresh_all_embeddings(entity_type: str = "all") -> dict:
     return counts
 
 
+# Strong references to in-flight fire-and-forget tasks. asyncio only keeps a
+# weak reference to a running task, so a bare ``asyncio.create_task(...)`` whose
+# result is discarded can be garbage-collected mid-flight, silently dropping the
+# work (see the asyncio.create_task docs). Holding each task in this set until it
+# finishes prevents that; the done-callback removes it and logs any exception.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_background(coro, *, label: str) -> None:
+    """Schedule a fire-and-forget coroutine that cannot be GC-dropped mid-flight.
+
+    Keeps a strong reference until completion, then discards it and logs any
+    exception loudly instead of letting it vanish into an un-awaited task.
+    """
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+
+    def _on_done(finished: asyncio.Task) -> None:
+        _background_tasks.discard(finished)
+        if finished.cancelled():
+            return
+        exc = finished.exception()
+        if exc is not None:
+            logger.warning("Background task %s failed: %s", label, exc)
+
+    task.add_done_callback(_on_done)
+
+
 async def store_thought(content: str, metadata: dict | None = None) -> str:
     pool = await get_pool()
     embedding = await _embed_or_none(content)
@@ -642,8 +674,14 @@ async def store_thought(content: str, metadata: dict | None = None) -> str:
     people = meta.get("people") or []
     projects = meta.get("projects") or []
     if result["metadata_changed"] and (people or projects):
-        asyncio.create_task(_refresh_mentioned_entities(people, projects))
-        asyncio.create_task(_link_thought_entities(thought_id, people, projects))
+        _spawn_background(
+            _refresh_mentioned_entities(people, projects),
+            label="refresh_mentioned_entities",
+        )
+        _spawn_background(
+            _link_thought_entities(thought_id, people, projects),
+            label="link_thought_entities",
+        )
 
     # Deferred derivation: unless the caller has already marked the thought
     # enriched, schedule model extraction (tags/people/projects/action_items/
@@ -651,7 +689,9 @@ async def store_thought(content: str, metadata: dict | None = None) -> str:
     # extraction model — a straggler is healed by backfill_thought_extractions if
     # the model is down. Mirrors the embedding degradation path above.
     if not meta.get("enriched"):
-        asyncio.create_task(extract_thought_metadata(thought_id))
+        _spawn_background(
+            extract_thought_metadata(thought_id), label="extract_thought_metadata"
+        )
 
     return thought_id
 
@@ -2874,8 +2914,17 @@ async def search_brain(
     """
     pool = await get_pool()
     embedding = await embed(query, task="query")
-    words = [w for w in re.sub(r"[^\w\s]", "", query).split() if len(w) > 2]
-    fts_query = " | ".join(words) if words else query[:50]
+    # Sanitize before to_tsquery: strip punctuation, then OR the word tokens.
+    # Never feed the raw query to to_tsquery — a punctuation-only or multi-word
+    # raw string (e.g. "!!!" or "ok go") is invalid tsquery syntax and raises an
+    # unhandled Postgres error. Prefer tokens >2 chars; fall back to all word
+    # tokens so short queries still search FTS. A punctuation-only query leaves
+    # fts_query = "", which to_tsquery('english', '') REJECTS ("syntax error in
+    # tsquery"); the SQL guards each FTS branch with `$2 <> ''` so an empty query
+    # skips FTS entirely and matches nothing instead of erroring.
+    tokens = re.sub(r"[^\w\s]", "", query).split()
+    words = [w for w in tokens if len(w) > 2] or tokens
+    fts_query = " | ".join(words)
     # Overfetch by cosine so the reranker has a candidate pool (no-op when off).
     fetch_n = _candidate_count(count)
 
@@ -2889,7 +2938,7 @@ async def search_brain(
                 WHERE embedding IS NOT NULL
                   AND (
                     1 - (embedding <=> $1) > $3
-                    OR fts @@ to_tsquery('english', $2)
+                    OR ($2 <> '' AND fts @@ to_tsquery('english', $2))
                   )
                 ORDER BY score DESC
                 LIMIT $4
@@ -2919,7 +2968,7 @@ async def search_brain(
                     WHERE c.embedding IS NOT NULL
                       AND (
                         1 - (c.embedding <=> $1) > $3
-                        OR c.fts @@ to_tsquery('english', $2)
+                        OR ($2 <> '' AND c.fts @@ to_tsquery('english', $2))
                       )
                 )
                 SELECT library_id, title, authors, year, source, doc_type, chunk_text, score

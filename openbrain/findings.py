@@ -149,25 +149,32 @@ async def extract_findings(paper_id: str) -> dict:
     return {"paper_id": paper_id, "extracted": len(rows), "status": "done"}
 
 
-async def backfill_findings(limit: int = 100) -> dict:
+async def backfill_findings(limit: int = 100, include_errors: bool = False) -> dict:
     """Extract findings for papers still ``pending`` (model down at ingest, etc.).
 
-    Mirrors ``brain.backfill_chunk_embeddings``: count + select the oldest pending
-    papers, run ``extract_findings`` on each, tally. Re-runnable; only touches
-    ``pending`` papers (``error`` papers are left for a deliberate retry, ``done``
-    papers are never reprocessed). Returns
+    Mirrors ``brain.backfill_chunk_embeddings``: count + select the oldest
+    unprocessed papers, run ``extract_findings`` on each, tally. Re-runnable;
+    ``done`` papers are never reprocessed.
+
+    By default only ``pending`` papers are touched. Set ``include_errors=True`` to
+    also retry papers stuck in ``error`` — a transient model outage marks a paper
+    ``error``, and without this a paper would be permanently stranded short of a
+    full force re-ingest. A successful retry flips ``error`` -> ``done``. Returns
     ``{pending_before, extracted_papers, failed, pending_after}``.
     """
+    statuses = ["pending", "error"] if include_errors else ["pending"]
     pool = await brain.get_pool()
     async with pool.acquire() as conn:
         pending_before = await conn.fetchval(
             "SELECT count(*) FROM library "
-            "WHERE findings_status = 'pending' AND doc_type = 'paper'"
+            "WHERE findings_status = ANY($1) AND doc_type = 'paper'",
+            statuses,
         )
         rows = await conn.fetch(
             "SELECT id FROM library "
-            "WHERE findings_status = 'pending' AND doc_type = 'paper' "
-            "ORDER BY created_at LIMIT $1",
+            "WHERE findings_status = ANY($1) AND doc_type = 'paper' "
+            "ORDER BY created_at LIMIT $2",
+            statuses,
             limit,
         )
 

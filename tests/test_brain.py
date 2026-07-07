@@ -261,6 +261,45 @@ class StoreThoughtTests(unittest.IsolatedAsyncioTestCase):
 
         refresh.assert_awaited_once_with(["Ada", "Grace"], [])
 
+    async def test_background_tasks_hold_ref_until_done_and_log_errors(self):
+        # The deferred enrichment task must not be garbage-collected mid-flight:
+        # store_thought holds a strong reference until it completes, then discards
+        # it and logs any exception instead of swallowing it silently.
+        brain._background_tasks.clear()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_extract(_thought_id):
+            started.set()
+            await release.wait()
+            raise RuntimeError("extraction blew up")
+
+        connection = _ThoughtConnection(
+            {"id": "thought-1", "inserted": True, "metadata_changed": False}
+        )
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
+            patch.object(brain, "embed", AsyncMock(return_value=[0.1, 0.2])),
+            patch.object(brain, "extract_thought_metadata", slow_extract),
+        ):
+            with self.assertLogs("openbrain.brain", level="WARNING") as cm:
+                thought_id = await brain.store_thought("Some thought", {"type": "note"})
+                await started.wait()
+                # Strong reference is held while the task is still in flight.
+                self.assertTrue(brain._background_tasks)
+                release.set()
+                # Drain the loop so the task finishes and its callback fires.
+                for _ in range(5):
+                    await asyncio.sleep(0)
+
+        self.assertEqual(thought_id, "thought-1")
+        # Completed task is discarded from the registry (no leak).
+        self.assertEqual(brain._background_tasks, set())
+        # Its exception was logged loudly, not silently dropped.
+        self.assertTrue(
+            any("extract_thought_metadata" in line for line in cm.output)
+        )
+
     async def test_capture_tool_exposes_structured_metadata(self):
         mcp = _Mcp()
         capture_tools.register(mcp)

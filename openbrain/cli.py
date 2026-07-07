@@ -230,9 +230,16 @@ def search_findings(
 @app.command(name="backfill-findings")
 def backfill_findings(
     limit: int = typer.Option(100, "--limit"),
+    include_errors: bool = typer.Option(
+        False,
+        "--include-errors",
+        help="Also retry papers marked 'error' by a prior transient model outage.",
+    ),
 ):
     """Extract findings for papers still pending (extraction model down at ingest)."""
-    res = asyncio.run(findings_mod.backfill_findings(limit=limit))
+    res = asyncio.run(
+        findings_mod.backfill_findings(limit=limit, include_errors=include_errors)
+    )
     _emit(res)
 
 

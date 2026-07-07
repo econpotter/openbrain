@@ -2918,8 +2918,10 @@ async def search_brain(
     # Never feed the raw query to to_tsquery — a punctuation-only or multi-word
     # raw string (e.g. "!!!" or "ok go") is invalid tsquery syntax and raises an
     # unhandled Postgres error. Prefer tokens >2 chars; fall back to all word
-    # tokens so short queries still search FTS; an empty result yields an empty
-    # tsquery that safely matches nothing.
+    # tokens so short queries still search FTS. A punctuation-only query leaves
+    # fts_query = "", which to_tsquery('english', '') REJECTS ("syntax error in
+    # tsquery"); the SQL guards each FTS branch with `$2 <> ''` so an empty query
+    # skips FTS entirely and matches nothing instead of erroring.
     tokens = re.sub(r"[^\w\s]", "", query).split()
     words = [w for w in tokens if len(w) > 2] or tokens
     fts_query = " | ".join(words)
@@ -2936,7 +2938,7 @@ async def search_brain(
                 WHERE embedding IS NOT NULL
                   AND (
                     1 - (embedding <=> $1) > $3
-                    OR fts @@ to_tsquery('english', $2)
+                    OR ($2 <> '' AND fts @@ to_tsquery('english', $2))
                   )
                 ORDER BY score DESC
                 LIMIT $4
@@ -2966,7 +2968,7 @@ async def search_brain(
                     WHERE c.embedding IS NOT NULL
                       AND (
                         1 - (c.embedding <=> $1) > $3
-                        OR c.fts @@ to_tsquery('english', $2)
+                        OR ($2 <> '' AND c.fts @@ to_tsquery('english', $2))
                       )
                 )
                 SELECT library_id, title, authors, year, source, doc_type, chunk_text, score

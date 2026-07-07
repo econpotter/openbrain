@@ -39,9 +39,14 @@ def register(mcp):
         return json.dumps(out, indent=2, default=str)
 
     @mcp.tool
-    async def backfill_findings(limit: int = 100) -> str:
-        """Extract findings for papers still pending (e.g. extraction model was down at ingest)."""
-        res = await findings.backfill_findings(limit=limit)
+    async def backfill_findings(limit: int = 100, include_errors: bool = False) -> str:
+        """Extract findings for papers still pending (e.g. extraction model was down at ingest).
+
+        Set include_errors=True to also retry papers marked 'error' by a prior
+        transient model outage, so they are not permanently stranded short of a
+        full force re-ingest.
+        """
+        res = await findings.backfill_findings(limit=limit, include_errors=include_errors)
         if res["pending_before"] == 0:
             return "No papers pending findings extraction."
         return (

@@ -79,6 +79,7 @@ class _FindingsConn:
         self.pending_rows = pending_rows or []
         self.search_rows = search_rows or []
         self.executed = []
+        self.fetched = []
 
     async def fetchrow(self, query, *args):
         if "SELECT title, abstract FROM library" in query:
@@ -93,6 +94,7 @@ class _FindingsConn:
         return None
 
     async def fetch(self, query, *args):
+        self.fetched.append((query, args))
         if "FROM findings f" in query:
             return self.search_rows
         if "SELECT id FROM library" in query:
@@ -242,6 +244,33 @@ class BackfillTests(unittest.IsolatedAsyncioTestCase):
             res = await findings.backfill_findings()
         self.assertEqual(res["pending_before"], 0)
         self.assertEqual(res["extracted_papers"], 0)
+
+    async def test_default_selects_only_pending(self):
+        conn = _FindingsConn(pending_count=0, pending_rows=[])
+        with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
+            await findings.backfill_findings()
+        selects = [c for c in conn.fetched if "SELECT id FROM library" in c[0]]
+        self.assertEqual(selects[0][1][0], ["pending"])
+
+    async def test_include_errors_retries_error_paper_to_ok(self):
+        # An error paper (transient model outage) is selected once include_errors
+        # is set, re-extracted, and flips error -> done. Without the flag it would
+        # be stranded short of a full force re-ingest.
+        conn = _FindingsConn(pending_count=1, pending_rows=[{"id": "err-paper"}])
+        extract = AsyncMock(
+            return_value={"paper_id": "err-paper", "extracted": 2, "status": "done"}
+        )
+        with (
+            patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))),
+            patch.object(findings, "extract_findings", extract),
+        ):
+            res = await findings.backfill_findings(limit=10, include_errors=True)
+        self.assertEqual(res["extracted_papers"], 1)
+        self.assertEqual(res["failed"], 0)
+        self.assertEqual(res["pending_after"], 0)
+        selects = [c for c in conn.fetched if "SELECT id FROM library" in c[0]]
+        self.assertEqual(selects[0][1][0], ["pending", "error"])
+        extract.assert_awaited_once_with("err-paper")
 
 
 # ---------------------------------------------------------------------------

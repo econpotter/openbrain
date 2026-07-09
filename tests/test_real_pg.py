@@ -15,6 +15,7 @@ of the offline stubs) before ``openbrain.brain`` is imported. Only model calls
 are stubbed; every SQL statement runs for real.
 """
 
+import json
 import os
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -115,6 +116,36 @@ class BackfillErrorRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(count, 1)
         # The pending-only pass never counted this error paper.
         self.assertIsInstance(skipped["extracted_papers"], int)
+
+
+@unittest.skipUnless(
+    _REAL_PG_URL,
+    "Set OPENBRAIN_TEST_DATABASE_URL to run the real-Postgres smoke tier.",
+)
+class ArchiveThoughtsTests(unittest.IsolatedAsyncioTestCase):
+    """archive_thoughts' extraction_run_id param sits inside jsonb_build_object
+    with no other reference to pin its type — mocked asyncpg can't see Postgres
+    reject that as an unresolvable parameter type ("could not determine data
+    type of parameter $2"). Only a real connection exercises this."""
+
+    _MARKER = "openbrain-issue-real-pg-archive-thoughts-trial"
+
+    async def test_archive_thoughts_sets_metadata_against_real_postgres(self):
+        thought_id = await brain.store_thought(
+            self._MARKER, {"type": "note", "source": "test"}
+        )
+
+        await brain.archive_thoughts([thought_id], "run-real-pg-trial")
+
+        pool = await brain.get_pool()
+        async with pool.acquire() as conn:
+            metadata = await conn.fetchval(
+                "SELECT metadata FROM thoughts WHERE id = $1", thought_id
+            )
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+        self.assertTrue(metadata["archived"])
+        self.assertEqual(metadata["extraction_run_id"], "run-real-pg-trial")
 
 
 if __name__ == "__main__":

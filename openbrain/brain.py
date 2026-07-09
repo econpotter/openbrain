@@ -1048,7 +1048,7 @@ async def archive_thoughts(thought_ids: list[str], extraction_run_id: str) -> No
             SET metadata = metadata || jsonb_build_object(
                     'archived', true,
                     'archived_at', now(),
-                    'extraction_run_id', $2
+                    'extraction_run_id', $2::text
                 )
             WHERE id = ANY($1::uuid[])
             """,

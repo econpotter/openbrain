@@ -173,6 +173,11 @@ def capture_transcript(
     trigger: str = typer.Option(None, "--trigger", help="stop|auto|manual"),
     source: str = typer.Option(None, "--source", help="Provider label: claude-code|codex"),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress all hook output"),
+    defer: bool = typer.Option(
+        False,
+        "--defer",
+        help="Queue locally for sweep instead of calling the server now.",
+    ),
 ):
     """Capture the transcript delta past this session's watermark.
 
@@ -223,6 +228,16 @@ def capture_transcript(
         "trigger": trig,
         "source": src,
     }
+    if defer:
+        try:
+            spool.enqueue("capture_transcript", arguments, _now())
+        except OSError as exc:
+            _quiet_print(quiet, f"capture-transcript: spool failed ({exc})")
+            raise typer.Exit(0)
+        _set_watermark_or_report(quiet, session_id, delta.total_lines)
+        _quiet_print(quiet, "capture-transcript: queued for sweep.", stderr=False)
+        raise typer.Exit(0)
+
     online, message = _capture_or_spool("capture_transcript", arguments)
     # Advance the watermark once the delta is durably committed — server ack
     # (stored or trivial-skip) or a durable spool entry. Exactly-once, no rescan.

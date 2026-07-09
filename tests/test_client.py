@@ -326,6 +326,54 @@ class CaptureTranscriptCommandTests(unittest.TestCase):
         self.assertEqual(args["source"], "codex")
         self.assertIn("capture this codex turn", args["content"])
 
+    def test_defer_queues_without_opening_mcp_client(self):
+        runner = CliRunner()
+        queued = []
+        watermarks = []
+
+        with TemporaryDirectory() as tmp:
+            tpath = Path(tmp) / "rollout-x.jsonl"
+            tpath.write_text(_codex_msg("user", "capture later") + "\n")
+
+            def enqueue(tool, arguments, queued_at):
+                queued.append((tool, arguments, queued_at))
+                return Path(tmp) / "queued.json"
+
+            with patch.object(cli_mod, "MCPClient", side_effect=AssertionError("no MCP")), \
+                 patch.object(cli_mod.spool, "enqueue", side_effect=enqueue), \
+                 patch.object(cli_mod.state, "get_watermark", return_value=0), \
+                 patch.object(
+                     cli_mod.state,
+                     "set_watermark",
+                     side_effect=lambda session, lines: watermarks.append((session, lines)),
+                 ):
+                result = runner.invoke(
+                    cli_mod.app,
+                    [
+                        "capture-transcript",
+                        str(tpath),
+                        "--session",
+                        "session-1",
+                        "--trigger",
+                        "stop",
+                        "--source",
+                        "codex",
+                        "--quiet",
+                        "--defer",
+                    ],
+                )
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(len(queued), 1)
+        tool, args, _ = queued[0]
+        self.assertEqual(tool, "capture_transcript")
+        self.assertEqual(args["session_id"], "session-1")
+        self.assertEqual(args["source"], "codex")
+        self.assertIn("capture later", args["content"])
+        self.assertEqual(watermarks, [("session-1", 1)])
+
     def test_quiet_server_and_spool_failure_still_emits_nothing(self):
         runner = CliRunner()
 

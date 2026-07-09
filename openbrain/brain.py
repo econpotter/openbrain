@@ -7,6 +7,8 @@ first use. Configuration is loaded from config.yaml (non-secrets) and .env
 """
 
 import asyncio
+import atexit
+import concurrent.futures
 import hashlib
 import json
 import logging
@@ -52,6 +54,23 @@ def _load_config() -> dict:
 
 
 _cfg = _load_config()
+
+_BLOCKING_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=int(_cfg.get("blocking_executor_workers", 4)),
+    thread_name_prefix="openbrain-blocking",
+)
+atexit.register(_BLOCKING_EXECUTOR.shutdown, wait=True)
+
+
+async def run_blocking(func: Callable):
+    """Run blocking adapters without using asyncio's default executor.
+
+    Python 3.13's default-executor shutdown can wait for minutes during
+    `asyncio.run()` / `IsolatedAsyncioTestCase` teardown in this environment.
+    An owned executor keeps shutdown explicit and test runs bounded.
+    """
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_BLOCKING_EXECUTOR, func)
 
 DATABASE_URL: str = os.environ["DATABASE_URL"]
 # library_path in config.yaml is the host-side path (used by scripts/backup.sh,
@@ -1671,12 +1690,9 @@ async def ingest_document_pipeline(
         async with pool.acquire() as conn:
             await conn.execute("DELETE FROM library WHERE id = $1", existing["id"])
 
-    loop = asyncio.get_event_loop()
     ext = path.suffix.lower()
     if ext == ".pdf":
-        first_page, full_text = await loop.run_in_executor(
-            None, _extract_pdf, str(path)
-        )
+        first_page, full_text = await run_blocking(lambda: _extract_pdf(str(path)))
     else:
         full_text = path.read_text(errors="replace")
         first_page = full_text[:3000]
@@ -1685,7 +1701,7 @@ async def ingest_document_pipeline(
     authors = []
     doi = _extract_doi(first_page)
     if doi:
-        meta = await loop.run_in_executor(None, _crossref_lookup, doi)
+        meta = await run_blocking(lambda: _crossref_lookup(doi))
         resolved_title = meta.get("title")
         authors = meta.get("authors") or []
         year = meta.get("year")
@@ -2088,16 +2104,13 @@ async def store_papers(paper_list: list[dict], *, force: bool = False) -> dict:
     if not paper_list:
         return {"stored": 0, "deduped": 0, "results": []}
     pool = await get_pool()
-    loop = asyncio.get_event_loop()
     results: list[dict] = []
     stored = deduped = 0
     for raw in paper_list:
         meta = dict(raw)
         if meta.get("doi") and not meta.get("abstract"):
             doi_value = meta["doi"]
-            extra = await loop.run_in_executor(
-                None, lambda: papers.lookup(doi_value)
-            )
+            extra = await run_blocking(lambda: papers.lookup(doi_value))
             if extra:
                 for key in ("abstract", "issn_l", "bibtex"):
                     if not meta.get(key) and extra.get(key):
@@ -2196,7 +2209,6 @@ async def get_citations(ref: str) -> list[dict]:
     (outbound references + inbound citing works) and merges/dedups the neighbors.
     Returns neighbor metadata dicts (no library ids — the driver stores keepers
     via store_papers to mint ids). Empty list when the paper can't be resolved."""
-    loop = asyncio.get_event_loop()
     r = (ref or "").strip()
     if not r:
         return []
@@ -2224,9 +2236,7 @@ async def get_citations(ref: str) -> list[dict]:
         # Bare DOI (or DOI-ish string).
         kwargs["doi"] = papers.normalize_doi(r) or r
 
-    return await loop.run_in_executor(
-        None, lambda: papers.citation_neighbors(**kwargs)
-    )
+    return await run_blocking(lambda: papers.citation_neighbors(**kwargs))
 
 
 async def _fetch_one(
@@ -2243,9 +2253,7 @@ async def _fetch_one(
     store it as a metadata-only library record with the abstract embedded. A
     title query tolerates misspellings via the shared fuzzy scorer; DOI/arXiv
     stay exact. Returns {"found": bool, ...stored fields}."""
-    loop = asyncio.get_event_loop()
-    meta = await loop.run_in_executor(
-        None,
+    meta = await run_blocking(
         lambda: papers.resolve_known_item(
             identifier,
             order=order,
@@ -2282,12 +2290,11 @@ async def fetch_papers(
     - Batch (identifiers): one known-item lookup per identifier, each independent
       so one bad/unfound identifier does not abort the rest.
     """
-    loop = asyncio.get_event_loop()
     order = source_order or _paper_sources_order()
 
     if topic is not None:
-        resolved = await loop.run_in_executor(
-            None, lambda: papers.search_topic(topic, order=order, limit=limit)
+        resolved = await run_blocking(
+            lambda: papers.search_topic(topic, order=order, limit=limit)
         )
         candidates: list[dict] = [dict(c) for c in resolved]
         stored = 0

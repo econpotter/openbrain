@@ -16,6 +16,7 @@ Subcommands:
 from __future__ import annotations
 
 import json
+import os
 import select
 import sys
 from datetime import datetime, timezone
@@ -67,20 +68,25 @@ def _capture_or_spool(tool: str, arguments: dict) -> tuple[bool, str]:
     Returns (online, message). online=True means the server acknowledged the
     call (message is its reply); online=False means it was spooled.
     """
+    def _spool_or_report(reason: str) -> tuple[bool, str]:
+        try:
+            spool.enqueue(tool, arguments, _now())
+        except OSError as exc:
+            return False, f"{reason}; spool failed ({exc})"
+        return False, f"{reason}; spooled"
+
     try:
         cfg = load_config()
     except ConfigError as exc:
         # No config at all: still fail soft by spooling, so a later configured
         # sweep can flush it.
-        spool.enqueue(tool, arguments, _now())
-        return False, f"not configured ({exc.args[0].splitlines()[0]}); spooled"
+        return _spool_or_report(f"not configured ({exc.args[0].splitlines()[0]})")
     try:
         with MCPClient(cfg) as client:
             reply = client.call_tool(tool, arguments)
         return True, reply
     except (MCPError, MCPToolError) as exc:
-        spool.enqueue(tool, arguments, _now())
-        return False, f"server unreachable ({exc}); spooled"
+        return _spool_or_report(f"server unreachable ({exc})")
 
 
 @app.command()
@@ -130,12 +136,48 @@ def _read_hook_stdin() -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _find_codex_transcript(session_id: str | None) -> Path | None:
+    """Find the Codex JSONL transcript for a thread id.
+
+    Codex exposes the thread id in CODEX_THREAD_ID in non-interactive hook
+    contexts. Session files are date-nested and include that id in the filename.
+    """
+    if not session_id:
+        return None
+    base = DEFAULT_TRANSCRIPT_DIRS["codex"].expanduser()
+    matches = sorted(
+        base.glob(f"**/*{session_id}.jsonl"),
+        key=lambda p: p.stat().st_mtime if p.exists() else 0,
+        reverse=True,
+    )
+    return matches[0] if matches else None
+
+
+def _quiet_print(quiet: bool, message: str, *, stderr: bool = True) -> None:
+    if quiet:
+        return
+    (err if stderr else console).print(message)
+
+
+def _set_watermark_or_report(quiet: bool, session_id: str, total_lines: int) -> None:
+    try:
+        state.set_watermark(session_id, total_lines)
+    except OSError as exc:
+        _quiet_print(quiet, f"capture-transcript: watermark update failed: {exc}")
+
+
 @app.command(name="capture-transcript")
 def capture_transcript(
     transcript_path: str = typer.Argument(None, help="Path to the transcript JSONL"),
     session: str = typer.Option(None, "--session", help="Session id (watermark key)"),
     trigger: str = typer.Option(None, "--trigger", help="stop|auto|manual"),
     source: str = typer.Option(None, "--source", help="Provider label: claude-code|codex"),
+    quiet: bool = typer.Option(False, "--quiet", help="Suppress all hook output"),
+    defer: bool = typer.Option(
+        False,
+        "--defer",
+        help="Queue locally for sweep instead of calling the server now.",
+    ),
 ):
     """Capture the transcript delta past this session's watermark.
 
@@ -146,29 +188,38 @@ def capture_transcript(
     """
     hook = _read_hook_stdin()
     path = transcript_path or hook.get("transcript_path")
-    session_id = session or hook.get("session_id")
+    session_id = (
+        session
+        or hook.get("session_id")
+        or hook.get("thread_id")
+        or os.environ.get("CODEX_THREAD_ID")
+    )
     trig = trigger or hook.get("hook_event_name") or "manual"
     src = source or hook.get("source")
+    if not path and src == "codex":
+        codex_path = _find_codex_transcript(session_id)
+        if codex_path is not None:
+            path = str(codex_path)
 
     if not path or not session_id:
-        err.print("capture-transcript: need a transcript path and session id.")
+        _quiet_print(quiet, "capture-transcript: need a transcript path and session id.")
         raise typer.Exit(0)  # fail soft — never break a hook
     if not src:
         # No source label: refuse loudly rather than silently mislabel the
         # capture (Codex thoughts stamped claude-code, or vice versa). Every
         # shipped hook passes --source; this only trips a hand-rolled one.
-        err.print("capture-transcript: need a --source label (e.g. claude-code|codex).")
+        _quiet_print(quiet, "capture-transcript: need a --source label (e.g. claude-code|codex).")
         raise typer.Exit(0)
     if not Path(path).expanduser().exists():
-        err.print(f"capture-transcript: transcript not found: {path}")
+        _quiet_print(quiet, f"capture-transcript: transcript not found: {path}")
         raise typer.Exit(0)
 
     watermark = state.get_watermark(session_id)
     delta = transcript.read_delta(path, watermark)
     if not delta.text.strip():
-        err.print("capture-transcript: no new content past watermark.")
+        _quiet_print(quiet, "capture-transcript: no new content past watermark.")
         # Nothing to capture; keep the watermark current so we don't rescan.
-        state.set_watermark(session_id, delta.total_lines)
+        _set_watermark_or_report(quiet, session_id, delta.total_lines)
         raise typer.Exit(0)
 
     arguments = {
@@ -177,11 +228,22 @@ def capture_transcript(
         "trigger": trig,
         "source": src,
     }
+    if defer:
+        try:
+            spool.enqueue("capture_transcript", arguments, _now())
+        except OSError as exc:
+            _quiet_print(quiet, f"capture-transcript: spool failed ({exc})")
+            raise typer.Exit(0)
+        _set_watermark_or_report(quiet, session_id, delta.total_lines)
+        _quiet_print(quiet, "capture-transcript: queued for sweep.", stderr=False)
+        raise typer.Exit(0)
+
     online, message = _capture_or_spool("capture_transcript", arguments)
     # Advance the watermark once the delta is durably committed — server ack
     # (stored or trivial-skip) or a durable spool entry. Exactly-once, no rescan.
-    state.set_watermark(session_id, delta.total_lines)
-    (console if online else err).print(message)
+    _set_watermark_or_report(quiet, session_id, delta.total_lines)
+    if not quiet:
+        (console if online else err).print(message)
     raise typer.Exit(0)
 
 

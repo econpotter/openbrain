@@ -150,6 +150,7 @@ class MergeCodexHooksTests(unittest.TestCase):
                 for h in entry["hooks"]
             ]
             self.assertTrue(any("--source codex" in c for c in cmds))
+            self.assertTrue(all("--quiet" in c for c in cmds if "openbrain" in c))
             # Second run: no change, no duplicate openbrain entries.
             self.assertFalse(self._merge(home))
             data2 = json.loads((home / ".codex" / "hooks.json").read_text())

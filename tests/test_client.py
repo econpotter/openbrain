@@ -279,6 +279,130 @@ class SweepSourceLabelTests(unittest.TestCase):
         )
 
 
+class CaptureTranscriptCommandTests(unittest.TestCase):
+    def test_quiet_missing_context_emits_nothing(self):
+        runner = CliRunner()
+
+        with patch.dict("os.environ", {}, clear=True):
+            result = runner.invoke(
+                cli_mod.app,
+                ["capture-transcript", "--trigger", "stop", "--source", "codex", "--quiet"],
+            )
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+
+    def test_codex_thread_env_finds_nested_transcript(self):
+        runner = CliRunner()
+        client = _FakeClient({"capture_transcript": "stored"})
+        thread_id = "019f3870-8424-7113-96b5-dc368a258efd"
+
+        with TemporaryDirectory() as tmp:
+            codex_root = Path(tmp) / ".codex" / "sessions"
+            nested = codex_root / "2026" / "07" / "06"
+            nested.mkdir(parents=True)
+            tpath = nested / f"rollout-2026-07-06T11-18-45-{thread_id}.jsonl"
+            tpath.write_text(_codex_msg("user", "capture this codex turn") + "\n")
+
+            with patch.dict("os.environ", {"CODEX_THREAD_ID": thread_id}, clear=True), \
+                 patch.dict(cli_mod.DEFAULT_TRANSCRIPT_DIRS, {"codex": codex_root}), \
+                 patch.object(cli_mod, "load_config", return_value=object()), \
+                 patch.object(cli_mod, "MCPClient", return_value=client), \
+                 patch.object(cli_mod.state, "get_watermark", return_value=0), \
+                 patch.object(cli_mod.state, "set_watermark"):
+                result = runner.invoke(
+                    cli_mod.app,
+                    ["capture-transcript", "--trigger", "stop", "--source", "codex", "--quiet"],
+                )
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(len(client.calls), 1)
+        tool, args = client.calls[0]
+        self.assertEqual(tool, "capture_transcript")
+        self.assertEqual(args["session_id"], thread_id)
+        self.assertEqual(args["source"], "codex")
+        self.assertIn("capture this codex turn", args["content"])
+
+    def test_defer_queues_without_opening_mcp_client(self):
+        runner = CliRunner()
+        queued = []
+        watermarks = []
+
+        with TemporaryDirectory() as tmp:
+            tpath = Path(tmp) / "rollout-x.jsonl"
+            tpath.write_text(_codex_msg("user", "capture later") + "\n")
+
+            def enqueue(tool, arguments, queued_at):
+                queued.append((tool, arguments, queued_at))
+                return Path(tmp) / "queued.json"
+
+            with patch.object(cli_mod, "MCPClient", side_effect=AssertionError("no MCP")), \
+                 patch.object(cli_mod.spool, "enqueue", side_effect=enqueue), \
+                 patch.object(cli_mod.state, "get_watermark", return_value=0), \
+                 patch.object(
+                     cli_mod.state,
+                     "set_watermark",
+                     side_effect=lambda session, lines: watermarks.append((session, lines)),
+                 ):
+                result = runner.invoke(
+                    cli_mod.app,
+                    [
+                        "capture-transcript",
+                        str(tpath),
+                        "--session",
+                        "session-1",
+                        "--trigger",
+                        "stop",
+                        "--source",
+                        "codex",
+                        "--quiet",
+                        "--defer",
+                    ],
+                )
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(len(queued), 1)
+        tool, args, _ = queued[0]
+        self.assertEqual(tool, "capture_transcript")
+        self.assertEqual(args["session_id"], "session-1")
+        self.assertEqual(args["source"], "codex")
+        self.assertIn("capture later", args["content"])
+        self.assertEqual(watermarks, [("session-1", 1)])
+
+    def test_quiet_server_and_spool_failure_still_emits_nothing(self):
+        runner = CliRunner()
+
+        with TemporaryDirectory() as tmp:
+            tpath = Path(tmp) / "rollout-x.jsonl"
+            tpath.write_text(_codex_msg("user", "capture despite outage") + "\n")
+            with patch.object(cli_mod, "load_config", side_effect=config_mod.ConfigError("missing")), \
+                 patch.object(cli_mod.spool, "enqueue", side_effect=OSError("read-only")), \
+                 patch.object(cli_mod.state, "set_watermark", side_effect=OSError("read-only")):
+                result = runner.invoke(
+                    cli_mod.app,
+                    [
+                        "capture-transcript",
+                        str(tpath),
+                        "--session",
+                        "session-1",
+                        "--trigger",
+                        "stop",
+                        "--source",
+                        "codex",
+                        "--quiet",
+                    ],
+                )
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+
+
 class ConfigTests(unittest.TestCase):
     def test_env_wins(self):
         env = {"OPENBRAIN_MCP_URL": "https://x/mcp", "OPENBRAIN_MCP_KEY": "k"}

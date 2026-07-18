@@ -8,7 +8,7 @@ embedding *model* calls are stubbed (deterministically); the asyncpg round-trip,
 the ``upsert_thought`` fingerprint merge, and the deferred #010 enrichment
 lifecycle are all real.
 
-Verifies the acceptance criteria the deployed rhythm server can't yet (it
+Verifies the acceptance criteria the deployed server can't yet (it
 predates this tool): a substantive delta stores an enriched ``conversation``
 thought, a repeated delta merges rather than duplicates, and a trivial delta
 stores nothing. Run: ``python scripts/trial-run-capture-transcript.py`` (needs

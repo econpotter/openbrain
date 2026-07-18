@@ -24,10 +24,10 @@ openbrain works as an MCP server but its interface fails in practice, in two way
 
 ## Deployment reality (constrains the design)
 
-- The server runs **on rhythm, inside the ai-stack docker compose stack**,
-  behind Caddy at `https://rhythm.herknet:8443/mcp` (bearer auth), reached from
-  workstations via the `rhythm-tunnel` ssh tunnel. Nothing openbrain runs
-  locally today.
+- The server runs **on the deployment host, inside the ai-stack docker compose
+  stack**, behind Caddy at `https://openbrain.example.com:8443/mcp` (bearer
+  auth), reached from workstations via the deployment ssh tunnel. Nothing
+  openbrain runs locally today.
 - Session transcripts live **on the local machine**
   (`~/.claude/projects/…/*.jsonl`, `~/.codex/sessions/…`). Any transcript
   processing trigger must run locally.
@@ -68,9 +68,9 @@ install (model config + API keys on every machine). Under the thin client:
 - The client parses the transcript JSONL delta locally (watermark logic from
   Plan G §3 is unchanged) and sends the **delta text** to the server.
 - A new server-side MCP tool (`capture_transcript`) summarizes the delta with
-  the existing `extraction:` model **on rhythm** and stores the summary through
-  the #010 write path (bare content → enriched). Trivial/no-op deltas are
-  skipped server-side.
+  the existing `extraction:` model **on the server** and stores the summary
+  through the #010 write path (bare content → enriched). Trivial/no-op deltas
+  are skipped server-side.
 - Everything else in Plan G (Stop + PreCompact wiring, watermark, no nested
   `claude`, fingerprint dedup backstop) stands.
 
@@ -89,7 +89,7 @@ One repo, one `pyproject.toml`:
   + stdlib; no asyncpg, no embedding stacks.
 - **`[server]` extra**: FastMCP, asyncpg, embedding/model deps. The Dockerfile
   installs `.[server]`; a server upgrade is `docker compose build && up -d` on
-  rhythm, in exactly one place, while thin clients stay dumb.
+  the deployment host, in exactly one place, while thin clients stay dumb.
 
 ## Distribution: Claude Code plugin (Plan I)
 

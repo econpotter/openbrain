@@ -5,12 +5,12 @@
 **Status:** Fixed in code (commit `e3e7030`, issue #001) — redeploy required. The
 deployed container reported here ran an image built before the fix.
 **Reported:** 2026-06-27
-**Severity:** High — full-text PDF ingest is broken on the deployed (rhythm) container. Only `fetch_paper` (metadata + abstract, no file) works.
+**Severity:** High — full-text PDF ingest is broken on the deployed container. Only `fetch_paper` (metadata + abstract, no file) works.
 
 ### Resolution
 
 `brain.py` reads `OPENBRAIN_LIBRARY_PATH` (container path) and the `Dockerfile`
-sets it to `/data/openbrain/library`. Rebuild + redeploy the rhythm container
+sets it to `/data/openbrain/library`. Rebuild + redeploy the deployment container
 from the current image to pick up the fix. **Still open:** the remote-ingest
 staging dir (`/tmp/openbrain-ingest`) is container-internal and unreachable by
 remote scp — bind-mount it to a host path or document a host-reachable location.
@@ -18,7 +18,7 @@ remote scp — bind-mount it to a host path or document a host-reachable locatio
 ### Symptom
 
 Calling `ingest_document` / `ingest_staged_document` against the deployed openbrain
-MCP server (container `b2e7deb55251` on `rhythm.herknet`) fails:
+MCP server (container `b2e7deb55251` on the deployment host) fails:
 
 ```
 Error calling tool 'ingest_document': [Errno 13] Permission denied: '/mnt/data'
@@ -49,7 +49,7 @@ not exist inside the container.
 
 1. `prepare_document_ingest(filename="X.pdf")` → returns a staging path under
    `/tmp/openbrain-ingest/...` (container-internal, not reachable by remote scp).
-2. Place a PDF in the library dir on the host: `scp X.pdf rhythm:/mnt/data/openbrain/library/`.
+2. Place a PDF in the library dir on the host: `scp X.pdf <deployment-host>:/mnt/data/openbrain/library/`.
 3. `ingest_document(filepath="/data/openbrain/library/X.pdf")` → `EACCES /mnt/data`.
 
 The file perms are not the issue (file + dirs are `0777`, readable by uid 1000).
@@ -172,7 +172,7 @@ Not a code defect in `backfill_embeddings` — it correctly heals chunks only wh
 the embed model is reachable (`0 embedded, 3 failed` = model still down). Added
 `list_pending_embeddings` (MCP tool + `brain.list_pending_embeddings`) so the
 *which* records are pending (id + title + chunk count) is visible, not just a
-count. Recovery action: confirm the embed model is healthy on the rhythm
+count. Recovery action: confirm the embed model is healthy on the deployment
 container, then run `backfill_embeddings`.
 
 ### Symptom

@@ -15,7 +15,8 @@ in two plugin-manifest author blocks stays (operator decision 2026-07-18).
 
 - Do NOT run `gh repo edit`, change visibility, or push. Local commits only.
 - Do NOT commit any real hostname, token, or URL of the operator's private
-  deployment. `rhythm.herknet` must not appear in the tree when done.
+  deployment. The private mesh hostname must not appear in the tree when done —
+  it is replaced everywhere by the `openbrain.example.com` placeholder.
 - README and prose follow `~/.config/agents/references/writing-style.md`.
 - This repo runs in production on the operator's mesh — change documentation
   and defaults only; do not alter runtime behavior for configured deployments
@@ -26,10 +27,10 @@ in two plugin-manifest author blocks stays (operator decision 2026-07-18).
 ### Task 1: Parameterize the private mesh hostname
 
 **Files:**
-- Modify: every file matching `grep -rln "rhythm\.herknet" .` (~10 docs/scripts per recon)
+- Modify: every file that referenced the private mesh hostname (~10 docs/scripts per recon)
 
-- [ ] **Step 1: Inventory.** `grep -rn "rhythm.herknet" .` — list every hit
-with context. Classify: docs prose, example commands, script defaults.
+- [ ] **Step 1: Inventory.** Grep the tree for the private mesh hostname — list
+every hit with context. Classify: docs prose, example commands, script defaults.
 
 - [ ] **Step 2: Replace.**
   - Docs/examples: use a neutral placeholder host — `https://openbrain.example.com:8443/mcp` — with one sentence: "replace with your deployment's URL."
@@ -38,7 +39,7 @@ with context. Classify: docs prose, example commands, script defaults.
 - [ ] **Step 3: Verify.**
 
 ```bash
-grep -rn "rhythm" . && echo "FIX" || echo "clean"
+grep -rn "<private-mesh-hostname>" . && echo "FIX" || echo "clean"
 uv run pytest -q 2>&1 | tail -2
 ```
 
@@ -64,7 +65,7 @@ content (recon rated it solid). Required touches:
   - Install/run commands verified against the repo (files referenced exist).
   - License: MIT.
 
-- [ ] **Step 2: Verify** — `grep -nE "rhythm|/home/potterzot" README.md` → no
+- [ ] **Step 2: Verify** — `grep -nE "<private-mesh-hostname>|/home/potterzot" README.md` → no
 output; style matches the guide.
 
 - [ ] **Step 3: Commit** — `git commit -am "docs: public-facing README pass"`

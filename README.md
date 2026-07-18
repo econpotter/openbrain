@@ -1,18 +1,13 @@
 # openbrain
 
-> **Status: ALPHA — development, not production.** No production users, no live
-> data to preserve, no external consumers of the contracts. Prioritize the
-> cleanest, best-designed codebase over stability of any current shape: reshape
-> schemas, rename and restructure freely, drop and rebuild re-derivable data,
-> break interfaces. Prefer the clean rewrite over the migration-safe path; no
-> back-compat shims unless asked. Tests, schemas, and validation exist to verify
-> correctness once we reach production — they are not a brake on change now;
-> update them to match the better design. Promoted to load-bearing production
-> rules only when this document says we have reached production.
+> **Status: Alpha** — in active development and daily personal use. Interfaces,
+> schemas, and stored-data shapes may still change without migration guarantees.
 
-A personal AI memory and knowledge base for researchers. One Postgres database,
-one MCP server, any AI can plug in. No middleware, no SaaS, no subscriptions
-beyond the AI you already use.
+A personal AI memory and knowledge base for researchers. One Postgres database
+(with pgvector), one MCP server, any AI can plug in. It stores thoughts,
+decisions, and documents, and gives back capture, semantic search, and nightly
+extraction — no middleware, no SaaS, no subscriptions beyond the AI you already
+use.
 
 You interact with your memory entirely through Claude.ai or Gemini — the AI
 mediates all reads and writes. You never touch the database directly.
@@ -133,10 +128,11 @@ consolidation. Caddy terminates TLS on port 8443 and proxies to the MCP server
 on the Docker network. This is an alternative to running the MCP server through
 the systemd service installed above.
 
-Set your hostname in `.env` next to `docker-compose.yaml`:
+Set your hostname in `.env` next to `docker-compose.yaml` (replace the
+placeholder with your deployment's hostname):
 
 ```
-CADDY_HOSTNAME=potter.nicholas-fuji.nord
+CADDY_HOSTNAME=openbrain.example.com
 ```
 
 Then bring up (or restart) the stack:
@@ -515,9 +511,9 @@ sudo update-ca-certificates
 
 **Verify:**
 ```bash
-curl -s https://potter.nicholas-fuji.nord:6666/health
+curl -s https://openbrain.example.com:6666/health
 # {"status":"healthy","database":"connected"}
-curl -s https://potter.nicholas-fuji.nord:8443/mcp/
+curl -s https://openbrain.example.com:8443/mcp/
 ```
 
 ## Repository structure
@@ -543,3 +539,7 @@ Remote document ingest uses `prepare_document_ingest` to reserve a staging path,
 then `ingest_staged_document` after the PDF/text file has been copied there.
 The final PDF is stored under `library_path`; Postgres stores metadata, paths,
 hashes, and searchable text chunks.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

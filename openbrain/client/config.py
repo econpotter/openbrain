@@ -70,7 +70,7 @@ def load_config(timeout: float | None = None) -> ClientConfig:
             "openbrain client is not configured: missing "
             + ", ".join(missing)
             + f".\nSet the environment variables or create {CONFIG_PATH} with:\n"
-            "  url: https://rhythm.herknet:8443/mcp\n"
+            "  url: https://openbrain.example.com:8443/mcp\n"
             "  key: <bearer token>\n"
         )
 

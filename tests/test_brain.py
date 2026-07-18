@@ -1718,6 +1718,51 @@ class ThoughtConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("people: Ada", result)
 
 
+class SearchThoughtsToolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_str_metadata_from_asyncpg_is_parsed(self):
+        # asyncpg returns jsonb columns as raw JSON strings (no codec is
+        # registered), so the tool must json.loads metadata before .get().
+        mcp = _Mcp()
+        search_tools.register(mcp)
+        rows = [
+            {
+                "similarity": 0.91,
+                "content": "Prefer walk-forward validation.",
+                "metadata": '{"tags": ["forecasting", "validation"]}',
+            }
+        ]
+        with patch.object(brain, "search_thoughts_vec", AsyncMock(return_value=rows)):
+            result = await mcp.tools["search_thoughts"]("validation")
+
+        self.assertIn("[0.91]", result)
+        self.assertIn("forecasting, validation", result)
+        self.assertIn("Prefer walk-forward validation.", result)
+
+    async def test_dict_metadata_still_supported(self):
+        mcp = _Mcp()
+        search_tools.register(mcp)
+        rows = [
+            {
+                "similarity": 0.80,
+                "content": "Already-parsed metadata.",
+                "metadata": {"tags": ["policy"]},
+            }
+        ]
+        with patch.object(brain, "search_thoughts_vec", AsyncMock(return_value=rows)):
+            result = await mcp.tools["search_thoughts"]("policy")
+
+        self.assertIn("policy", result)
+
+    async def test_null_metadata_is_safe(self):
+        mcp = _Mcp()
+        search_tools.register(mcp)
+        rows = [{"similarity": 0.75, "content": "No metadata.", "metadata": None}]
+        with patch.object(brain, "search_thoughts_vec", AsyncMock(return_value=rows)):
+            result = await mcp.tools["search_thoughts"]("x")
+
+        self.assertIn("No metadata.", result)
+
+
 class TableStatsTests(unittest.IsolatedAsyncioTestCase):
     async def test_table_stats_uses_aggregate_function(self):
         stats = {

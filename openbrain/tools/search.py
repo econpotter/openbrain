@@ -2,6 +2,8 @@
 tools/search.py — search_thoughts, browse_recent, get_stats tools.
 """
 
+import json
+
 from openbrain import brain
 
 
@@ -34,6 +36,8 @@ def register(mcp):
             score = f"{r['similarity']:.2f}"
             snippet = r["content"][:300].replace("\n", " ")
             meta = r.get("metadata") or {}
+            if isinstance(meta, str):
+                meta = json.loads(meta)
             tags = ", ".join(meta.get("tags", []))
             tag_str = f"  [{tags}]" if tags else ""
             lines.append(f"[{score}]{tag_str} {snippet}")

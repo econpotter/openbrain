@@ -16,7 +16,7 @@ prompt-type hooks in `docs/hooks/`.
 
 The heavy logic stays server-side. The hooks call the thin `openbrain` CLI
 (Plan H), which speaks MCP to the same `:8443/mcp` endpoint every other client
-uses and spools captures locally when the tunnel is down.
+uses and spools captures locally when the deployment is unreachable.
 
 ## Install
 
@@ -34,8 +34,8 @@ uses and spools captures locally when the tunnel is down.
 
    ```bash
    export OPENBRAIN_MCP_KEY="<bearer token>"
-   # optional: point at a non-tunnel endpoint (defaults to the rhythm tunnel URL)
-   export OPENBRAIN_MCP_URL="https://rhythm.herknet:8443/mcp"
+   # optional: point at your deployment endpoint (replace with your deployment's URL)
+   export OPENBRAIN_MCP_URL="https://openbrain.example.com:8443/mcp"
    ```
 
 3. **Add the marketplace and enable the plugin.** This repo doubles as its own

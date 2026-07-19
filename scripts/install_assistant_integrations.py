@@ -14,7 +14,7 @@ in one `enabledPlugins` entry. See `integrations/claude-code/README.md`.
 Idempotent and self-healing: re-running replaces only openbrain's own entries
 (never an unrelated project's), fixes a stale MCP `bearer_token_env_var` or
 `url` (e.g. a leftover NordVPN meshnet hostname — the intended path is an ssh
-tunnel to rhythm.herknet) in place, and backs up each file it modifies (to
+tunnel to the deployment host) in place, and backs up each file it modifies (to
 <file>.bak).
 """
 
@@ -42,7 +42,7 @@ HOME = Path.home()
 # Claude Code plugin use, so a single OPENBRAIN_MCP_KEY export drives every
 # client. The value itself is never written to disk here.
 MCP_KEY_ENV_VAR = "OPENBRAIN_MCP_KEY"
-DEFAULT_MCP_URL = "https://rhythm.herknet:8443/mcp"
+DEFAULT_MCP_URL = "https://openbrain.example.com:8443/mcp"
 
 
 def backup(path: Path) -> None:
@@ -135,7 +135,7 @@ def _rewrite_mcp_block(text: str, target_url: str) -> str:
 
     Covers both known-stale states seen live: the wrong bearer env var (e.g.
     MCP_ACCESS_KEY) and a stale meshnet hostname (e.g. a NordVPN `.nord`
-    address) left over from before the ssh-tunnel-to-rhythm.herknet path was
+    address) left over from before the ssh-tunnel-to-deployment-host path was
     the intended one.
     """
     lines = text.splitlines()
@@ -183,7 +183,7 @@ def merge_codex_mcp() -> str:
     Adds the [mcp_servers.openbrain] block if absent; if present but stale —
     wrong bearer_token_env_var (e.g. MCP_ACCESS_KEY) or a stale meshnet
     hostname instead of the intended ssh-tunnel target (OPENBRAIN_MCP_URL, or
-    rhythm.herknet by default) — fixes it in place rather than skipping.
+    the example.com placeholder by default) — fixes it in place rather than skipping.
     Returns one of: added | fixed | unchanged | unparseable. Backs up the file
     before any write.
     """

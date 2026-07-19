@@ -87,7 +87,7 @@ class MergeCodexMcpTests(unittest.TestCase):
     def test_heals_stale_bearer_and_stale_url_together(self):
         """Live case found on a real machine: a manually hand-written block used
         both the wrong bearer var (MCP_ACCESS_KEY) and a stale NordVPN meshnet
-        hostname — the intended path is an ssh tunnel to rhythm.herknet."""
+        hostname — the intended path is an ssh tunnel to the deployment host."""
         text = (
             'model = "gpt-5.5"\n\n'
             "[mcp_servers.openbrain]\n"

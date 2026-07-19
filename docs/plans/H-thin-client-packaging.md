@@ -3,8 +3,8 @@
 ## Goal
 
 A small `openbrain` CLI, installable on any workstation with
-`uv tool install`, that talks MCP to the existing server on rhythm and gives
-hooks/timers a deterministic way to capture and recall — while the server
+`uv tool install`, that talks MCP to the existing server on the deployment host
+and gives hooks/timers a deterministic way to capture and recall — while the server
 (in the ai-stack compose stack) remains the only place heavy logic runs.
 
 Design: `docs/design/2026-07-01-thin-client-and-plugin.md`. This plan
@@ -35,7 +35,7 @@ awaiting review; land it first.
 
 ## 2. Client transport
 
-MCP streamable-HTTP client against `https://rhythm.herknet:8443/mcp`:
+MCP streamable-HTTP client against `https://openbrain.example.com:8443/mcp`:
 initialize handshake, session header, bearer auth. Config resolution order:
 env (`OPENBRAIN_MCP_URL`, `OPENBRAIN_MCP_KEY`) → `~/.openbrain/config.yaml` →
 error with a clear message. **Trial-run against the real endpoint through the
@@ -104,7 +104,7 @@ container is untouched.
    `openbrain` CLI whose install pulls no server-only dependencies; the
    ai-stack Docker image still builds and serves with `.[server]`.
 2. `openbrain capture "test thought"` performs a live round trip through the
-   tunnel to rhythm — verified by finding the thought via `search_brain`
+   tunnel to the deployment host — verified by finding the thought via `search_brain`
    afterward (real endpoint, not a mock).
 3. `openbrain capture-transcript` on a real Claude Code transcript stores a
    server-side summary enriched by the #010 write path; called twice, the
@@ -123,7 +123,7 @@ container is untouched.
 
 ## Live verification (2026-07-01)
 
-Verified against the real rhythm endpoint (`https://rhythm.herknet:8443/mcp`,
+Verified against the real deployment endpoint (`https://openbrain.example.com:8443/mcp`,
 config in `~/.openbrain/config.yaml`) and an ephemeral pgvector container:
 
 - **AC1** — `uv tool install .` pulls 15 thin packages (httpx/pyyaml/typer/rich +
@@ -143,15 +143,15 @@ config in `~/.openbrain/config.yaml`) and an ephemeral pgvector container:
   checks against real asyncpg + pgvector + the #010 write path: substantive delta
   → enriched `conversation` thought; repeat → fingerprint merge; trivial → nothing.
 
-### Deferred: AC3 live on rhythm
+### Deferred: AC3 live on the deployment host
 
-The deployed rhythm server (v3.4.2) predates `capture_transcript` — `tools/list`
-confirms it is **not** yet deployed there (`capture_thought` is). AC3's on-rhythm
-leg (real transcript → server summary → watermark no-op on re-run) can only be
+The deployed server (v3.4.2) predates `capture_transcript` — `tools/list`
+confirms it is **not** yet deployed there (`capture_thought` is). AC3's
+on-deployment leg (real transcript → server summary → watermark no-op on re-run) can only be
 run **after** the server image built from this branch's `.[server]` ships. The
 server-side behavior is otherwise fully proven by the trial above.
 
 **Follow-up:** post-deploy, re-run `openbrain capture-transcript <real
-transcript> --session <id> --trigger stop` twice against rhythm (second run
+transcript> --session <id> --trigger stop` twice against the deployment (second run
 reports "no new content past watermark") and one trivial transcript (stores
 nothing), and flush the one lagging `sweep` path end-to-end.

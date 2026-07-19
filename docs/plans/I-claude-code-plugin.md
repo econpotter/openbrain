@@ -45,7 +45,7 @@ client.
 
 ## 2. MCP registration
 
-Plugin-bundled MCP config pointing at `https://rhythm.herknet:8443/mcp`
+Plugin-bundled MCP config pointing at `https://openbrain.example.com:8443/mcp`
 (streamable HTTP) with `Authorization` from `${OPENBRAIN_MCP_KEY}`. URL
 overridable via env for future non-tunnel access. Result: tools exist in every
 session regardless of cwd — closes the `~/.mcp.json` `$HOME`-scope failure.

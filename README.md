@@ -9,8 +9,10 @@ decisions, and documents, and gives back capture, semantic search, and nightly
 extraction — no middleware, no SaaS, no subscriptions beyond the AI you already
 use.
 
-You interact with your memory entirely through Claude.ai or Gemini — the AI
+You interact with your memory entirely through an agent. the AI
 mediates all reads and writes. You never touch the database directly.
+
+Based on ideas from Nate B. Jones' [openbrain](https://github.com/NateBJones-Projects/OB1).
 
 ## What it does
 

@@ -11,6 +11,7 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from typer.testing import CliRunner
@@ -29,6 +30,7 @@ class _FakeClient:
     def __init__(self, replies):
         self._replies = replies
         self.calls = []
+        self.timeouts = []
 
     def __enter__(self):
         return self
@@ -39,6 +41,23 @@ class _FakeClient:
     def call_tool(self, name, arguments):
         self.calls.append((name, arguments))
         return self._replies.get(name, "")
+
+    def set_timeout(self, seconds):
+        self.timeouts.append(seconds)
+
+
+def _fake_time(values):
+    """A stand-in `time` module whose `monotonic` walks a scripted sequence.
+
+    Returns each value in turn and then repeats the last one, so a test only has
+    to script the readings it cares about.
+    """
+    seq = list(values)
+
+    def monotonic():
+        return seq.pop(0) if len(seq) > 1 else seq[0]
+
+    return SimpleNamespace(monotonic=monotonic)
 
 
 def _line(type_, role, content):
@@ -447,6 +466,42 @@ class MCPParseTests(unittest.TestCase):
         self.assertEqual(mcp_mod._text_from_content(content), "hello\nworld")
 
 
+class MCPTimeoutTests(unittest.TestCase):
+    """A bare float timeout in httpx applies to every phase of every request, so
+    an unreachable endpoint spends the whole budget waiting to connect. Connect
+    gets its own short allowance instead."""
+
+    def _client(self, timeout):
+        cfg = config_mod.ClientConfig(url="https://x/mcp", key="k", timeout=timeout)
+        return mcp_mod.MCPClient(cfg)
+
+    def test_connect_timeout_is_distinct_from_read(self):
+        client = self._client(6.0)
+        try:
+            timeout = client._client.timeout
+        finally:
+            client.close()
+        self.assertEqual(timeout.connect, mcp_mod.CONNECT_TIMEOUT)
+        self.assertEqual(timeout.read, 6.0)
+        self.assertLess(timeout.connect, timeout.read)
+
+    def test_set_timeout_rebudgets_the_live_client(self):
+        client = self._client(6.0)
+        try:
+            client.set_timeout(3.0)
+            rebudgeted = client._client.timeout
+            # A remaining budget under the connect allowance caps connect too:
+            # never wait longer than the caller actually has left.
+            client.set_timeout(0.5)
+            squeezed = client._client.timeout
+        finally:
+            client.close()
+        self.assertEqual(rebudgeted.read, 3.0)
+        self.assertEqual(rebudgeted.connect, mcp_mod.CONNECT_TIMEOUT)
+        self.assertEqual(squeezed.read, 0.5)
+        self.assertEqual(squeezed.connect, 0.5)
+
+
 class PackagingGuardTests(unittest.TestCase):
     def test_client_imports_no_server_modules(self):
         # Fresh interpreter: importing the client must not drag in server deps.
@@ -508,6 +563,61 @@ class BriefCommandTests(unittest.TestCase):
         result = self._run(raises=mcp_mod.MCPError("tunnel down"))
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(result.stdout.strip(), "")
+
+    def test_recall_gets_the_remaining_budget_not_a_fresh_one(self):
+        # 1.5s elapsed by the time the briefing lands → recall may spend the
+        # 4.5s that is left, not another full request timeout.
+        result, client, load_config = self._run_budgeted(
+            [0.0, 0.0, 1.5],
+            replies={"get_briefing": "b", "search_brain": "r"},
+        )
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual([name for name, _ in client.calls], ["get_briefing", "search_brain"])
+        self.assertEqual(client.timeouts, [4.5])
+        # The first request is bounded by the same budget, not the old flat 8s.
+        self.assertLessEqual(
+            load_config.call_args.kwargs["timeout"], cli_mod.BRIEF_BUDGET_SECONDS
+        )
+
+    def test_exhausted_budget_skips_recall_and_still_emits_briefing(self):
+        # Briefing lands with 0.5s left — under the recall floor. Starting a
+        # search would only get cut off, and the briefing is the real payload.
+        result, client, _ = self._run_budgeted(
+            [0.0, 0.0, 5.5],
+            replies={"get_briefing": "BRIEFING — today", "search_brain": "THOUGHTS: ..."},
+        )
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual([name for name, _ in client.calls], ["get_briefing"])
+        ctx = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(ctx, "BRIEFING — today")
+        self.assertNotIn("THOUGHTS", ctx)
+
+    def test_overrun_budget_is_fail_soft(self):
+        # The budget is already blown before the first request: nothing may
+        # raise, the exit code stays 0, and the timeout handed to httpx stays
+        # positive (a non-positive value would abandon the call outright).
+        result, client, load_config = self._run_budgeted(
+            [0.0, 6.4, 9.9], replies={"get_briefing": "b", "search_brain": "r"}
+        )
+        self.assertEqual(result.exit_code, 0)
+        self.assertIsNone(result.exception)
+        self.assertEqual([name for name, _ in client.calls], ["get_briefing"])
+        self.assertGreater(load_config.call_args.kwargs["timeout"], 0)
+
+    def _run_budgeted(self, clock_readings, replies):
+        """Invoke `brief` with a scripted clock. Returns (result, client, mock).
+
+        `clock_readings` are consumed in order: deadline start, the reading that
+        sizes the first request, then the one taken after the briefing returns.
+        """
+        cfg = config_mod.ClientConfig(url="https://x/mcp", key="k")
+        client = _FakeClient(replies)
+        runner = CliRunner()
+        with patch.object(cli_mod, "time", _fake_time(clock_readings)), \
+             patch.object(cli_mod, "load_config", return_value=cfg) as load_config, \
+             patch.object(cli_mod, "MCPClient", return_value=client):
+            result = runner.invoke(cli_mod.app, ["brief", "--cwd", "/tmp/myproj"])
+        return result, client, load_config
 
 
 if __name__ == "__main__":

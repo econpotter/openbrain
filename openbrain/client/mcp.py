@@ -16,6 +16,13 @@ import httpx
 
 PROTOCOL_VERSION = "2025-06-18"
 
+# Connecting is either fast or never: a live tunnel completes the TCP/TLS
+# handshake in milliseconds, while a dead one hangs until the timeout expires.
+# Budgeting connect separately from read means an unreachable server costs ~1.5s
+# instead of the whole request budget — the difference between a SessionStart
+# hook that degrades and one that gets killed.
+CONNECT_TIMEOUT = 1.5
+
 
 class MCPError(RuntimeError):
     """A transport- or protocol-level failure talking to the MCP server."""
@@ -23,6 +30,15 @@ class MCPError(RuntimeError):
 
 class MCPToolError(RuntimeError):
     """The tool ran but returned an error result (`isError: true`)."""
+
+
+def _timeout(seconds: float) -> httpx.Timeout:
+    """Per-request timeout with connect budgeted separately from read/write.
+
+    A bare float in httpx applies the same limit to every phase of every
+    request, so N sequential calls can each burn the full amount.
+    """
+    return httpx.Timeout(seconds, connect=min(CONNECT_TIMEOUT, seconds))
 
 
 def _parse_sse(body: str) -> dict:
@@ -45,7 +61,7 @@ class MCPClient:
     def __init__(self, config) -> None:
         self._config = config
         self._client = httpx.Client(
-            timeout=config.timeout,
+            timeout=_timeout(config.timeout),
             verify=config.verify_tls,
             headers={"Authorization": f"Bearer {config.key}"},
         )
@@ -63,6 +79,15 @@ class MCPClient:
 
     def close(self) -> None:
         self._client.close()
+
+    def set_timeout(self, seconds: float) -> None:
+        """Re-budget the per-request timeout on the live client.
+
+        A caller working against one wall-clock deadline (see `brief`) has less
+        budget left for each successive round trip; this shrinks the limit
+        without discarding the open connection and MCP session.
+        """
+        self._client.timeout = _timeout(seconds)
 
     # -- low-level RPC ------------------------------------------------------
     def _headers(self) -> dict[str, str]:

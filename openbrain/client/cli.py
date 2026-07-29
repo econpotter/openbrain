@@ -19,6 +19,7 @@ import json
 import os
 import select
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -254,6 +255,19 @@ def _infer_project(cwd: str | None) -> str | None:
     return name or None
 
 
+# Total wall-clock budget for `brief`, spent across all of its round trips. The
+# Claude Code SessionStart hook is killed at 10s, so this leaves ~4s of margin
+# for interpreter startup, config load, and emitting the JSON envelope. A
+# per-request timeout cannot bound this: three sequential calls at 8s each is
+# 24s against a 10s limit.
+BRIEF_BUDGET_SECONDS = 6.0
+
+# Below this much remaining budget, skip the recall call rather than start a
+# request that would only be cut off. The briefing is the payload; recall is
+# enrichment.
+BRIEF_MIN_RECALL_SECONDS = 1.0
+
+
 @app.command()
 def brief(
     cwd: str = typer.Option(None, "--cwd", help="Working dir to scope recall"),
@@ -264,19 +278,29 @@ def brief(
     Emits the documented Claude Code SessionStart hook shape on stdout —
     `{"hookSpecificOutput": {"hookEventName": "SessionStart",
     "additionalContext": ...}}` — so the briefing and project-relevant recall are
-    injected into the session as context (push recall). One round trip, short
-    timeout. On any failure prints nothing and exits 0 so the hook injects no
-    context rather than surfacing an error.
+    injected into the session as context (push recall).
+
+    The whole command runs against a single wall-clock budget
+    (`BRIEF_BUDGET_SECONDS`) rather than a per-request timeout: the remaining
+    budget is handed to each successive round trip, and recall is dropped when
+    too little is left. On any failure prints nothing and exits 0 so the hook
+    injects no context rather than surfacing an error.
     """
+    deadline = time.monotonic() + BRIEF_BUDGET_SECONDS
     hook = _read_hook_stdin()
     scope = cwd or hook.get("cwd")
     recall_query = query or _infer_project(scope)
     try:
-        cfg = load_config(timeout=8.0)
+        # Floor the initial timeout above zero: httpx treats a non-positive
+        # value as "give up immediately", and a request never attempted is
+        # strictly worse than one that fails fast on connect.
+        cfg = load_config(timeout=max(deadline - time.monotonic(), 0.1))
         with MCPClient(cfg) as client:
             briefing = client.call_tool("get_briefing", {"days": 1})
             recall = ""
-            if recall_query:
+            remaining = deadline - time.monotonic()
+            if recall_query and remaining > BRIEF_MIN_RECALL_SECONDS:
+                client.set_timeout(remaining)
                 recall = client.call_tool("search_brain", {"query": recall_query})
     except (ConfigError, MCPError, MCPToolError):
         raise typer.Exit(0)  # silent: no context is better than a broken hook

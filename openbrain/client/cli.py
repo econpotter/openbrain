@@ -283,7 +283,8 @@ def brief(
     The whole command runs against a single wall-clock budget
     (`BRIEF_BUDGET_SECONDS`) rather than a per-request timeout: the remaining
     budget is handed to each successive round trip, and recall is dropped when
-    too little is left. On any failure prints nothing and exits 0 so the hook
+    too little is left. Recall is best-effort: if it fails the briefing is still
+    emitted. If the briefing itself fails, prints nothing and exits 0 so the hook
     injects no context rather than surfacing an error.
     """
     deadline = time.monotonic() + BRIEF_BUDGET_SECONDS
@@ -301,7 +302,13 @@ def brief(
             remaining = deadline - time.monotonic()
             if recall_query and remaining > BRIEF_MIN_RECALL_SECONDS:
                 client.set_timeout(remaining)
-                recall = client.call_tool("search_brain", {"query": recall_query})
+                # Recall is enrichment, so a failure here degrades rather than
+                # discards: the briefing is already in hand and is the payload
+                # the session actually needs. Only a failed briefing is fatal.
+                try:
+                    recall = client.call_tool("search_brain", {"query": recall_query})
+                except (MCPError, MCPToolError):
+                    recall = ""
     except (ConfigError, MCPError, MCPToolError):
         raise typer.Exit(0)  # silent: no context is better than a broken hook
 

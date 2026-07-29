@@ -40,7 +40,12 @@ class _FakeClient:
 
     def call_tool(self, name, arguments):
         self.calls.append((name, arguments))
-        return self._replies.get(name, "")
+        reply = self._replies.get(name, "")
+        # A scripted reply may be an exception to simulate that one tool call
+        # failing while the rest of the sequence succeeds.
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
 
     def set_timeout(self, seconds):
         self.timeouts.append(seconds)
@@ -603,6 +608,42 @@ class BriefCommandTests(unittest.TestCase):
         self.assertIsNone(result.exception)
         self.assertEqual([name for name, _ in client.calls], ["get_briefing"])
         self.assertGreater(load_config.call_args.kwargs["timeout"], 0)
+
+    def test_recall_failure_still_emits_the_briefing(self):
+        # The briefing succeeded and is the payload the session needs; a failed
+        # recall must degrade to briefing-only, not discard what we already have.
+        result = self._run(
+            replies={
+                "get_briefing": "BRIEFING — today",
+                "search_brain": mcp_mod.MCPError("tunnel down mid-call"),
+            }
+        )
+        self.assertEqual(result.exit_code, 0)
+        self.assertIsNone(result.exception)
+        ctx = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(ctx, "BRIEFING — today")
+
+    def test_recall_tool_error_still_emits_the_briefing(self):
+        # Same contract for a tool-level error (isError: true), not just a
+        # transport failure.
+        result = self._run(
+            replies={
+                "get_briefing": "BRIEFING — today",
+                "search_brain": mcp_mod.MCPToolError("search failed"),
+            }
+        )
+        self.assertEqual(result.exit_code, 0)
+        ctx = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(ctx, "BRIEFING — today")
+
+    def test_briefing_failure_is_still_fatal_and_silent(self):
+        # The inverse: recall is best-effort, the briefing is not. A failed
+        # briefing still emits nothing at all.
+        result = self._run(
+            replies={"get_briefing": mcp_mod.MCPError("tunnel down"), "search_brain": "r"}
+        )
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout.strip(), "")
 
     def _run_budgeted(self, clock_readings, replies):
         """Invoke `brief` with a scripted clock. Returns (result, client, mock).

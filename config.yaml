@@ -102,3 +102,18 @@ extraction:
   # heals the ones whose model was down at write time. Short so an outage is fixed
   # within minutes, not at the next nightly run_at. Separate schedule from run_at.
   sweep_interval_minutes: 5
+
+judge:
+  # Typed per-thought judgments from Jev (TypeSafe System One): an importance
+  # Score over the 0-6 levels in brain.IMPORTANCE_LEVELS, and a Choice over the
+  # active projects. Jev returns probabilities, not text, so DeepSeek keeps tags,
+  # people and action items. Key: TYPESAFE_API_KEY in the environment.
+  # Pin the model: the levels and project share were checked against this version.
+  model: jev-1.13.0
+  # A thought links to the top project in Jev's Choice and to any other project
+  # with at least this share of the top probability. Picked from 51 labelled
+  # thoughts: 0.3 kept 45 exact project sets and caught second projects that 0.5
+  # missed. The raw distribution is stored in metadata.judge, so changing this
+  # needs no new Jev calls.
+  project_share: 0.3
+  timeout: 30

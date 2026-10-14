@@ -112,7 +112,8 @@ async def _run_sweep() -> None:
     task could not complete because the model was down. It runs on a *short* cadence
     (minutes) so an outage that lasted an hour is healed minutes after the model is
     back — not at the next nightly consolidation. It is deliberately cheap: only the
-    two thought backfills, no backup, no synthesis, no library/findings work.
+    thought backfills (embeddings, enrichment, Jev judgments), no backup, no
+    synthesis, no library/findings work.
     """
     logger.info("Thought straggler sweep started.")
     tb = await brain.backfill_thought_embeddings()
@@ -133,6 +134,16 @@ async def _run_sweep() -> None:
         f"{tx['pending_after']} still pending "
         f"(of {tx['pending_before']} before this run).",
         tx_status,
+    )
+
+    tj = await brain.backfill_thought_judgments()
+    tj_status = "succeeded" if tj["failed"] == 0 else "completed with failures"
+    logger.info(
+        "Thought judgment backfill %s: "
+        f"{tj['judged']} judged, {tj['failed']} failed, "
+        f"{tj['pending_after']} still pending "
+        f"(of {tj['pending_before']} before this run).",
+        tj_status,
     )
     logger.info("Thought straggler sweep complete.")
 

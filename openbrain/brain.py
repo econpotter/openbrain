@@ -88,6 +88,7 @@ INGEST_STAGING_PATH: Path = Path(
     INGEST_CONFIG.get("staging_path", "/tmp/openbrain-ingest")
 ).expanduser()
 EXTRACTION_CONFIG: dict = _cfg.get("extraction", {})
+JUDGE_CONFIG: dict = _cfg.get("judge", {})
 RERANK_CONFIG: dict = _cfg.get("rerank", {})
 
 # Per-request embedding timeout (seconds). Without it a dead or unsupported
@@ -724,18 +725,16 @@ async def store_thought(content: str, metadata: dict | None = None) -> str:
 def _thought_extraction_prompt(content: str) -> str:
     """Build the deterministic per-thought metadata extraction prompt.
 
-    Asks for the same structured fields a curating agent would supply, so an
-    automated capture (content only) ends up as rich as a hand-curated one. Type
-    is deliberately not extracted — the model must never reclassify a caller's
-    thought type.
+    Asks for the free-text fields a curating agent would supply, so an automated
+    capture (content only) ends up as rich as a hand-curated one. Importance and
+    projects come from ``judge_thought`` instead. Type is deliberately not
+    extracted — the model must never reclassify a caller's thought type.
     """
     return (
         "Extract structured metadata from this personal memory note as a JSON "
         "object with keys: "
         '"tags"(array of topic keywords), "people"(array of names mentioned), '
-        '"projects"(array of project names mentioned), '
-        '"action_items"(array of concrete follow-up actions), '
-        '"importance"(integer 0-6, higher = more durable). '
+        '"action_items"(array of concrete follow-up actions). '
         "Use empty arrays and omit fields you cannot determine. "
         "Return ONLY the JSON object.\n\n"
         f"NOTE:\n{content}"
@@ -759,26 +758,139 @@ def parse_thought_metadata(raw: str) -> dict | None:
     if not isinstance(data, dict):
         return None
     out: dict = {}
-    for key in ("tags", "people", "projects", "action_items"):
+    for key in ("tags", "people", "action_items"):
         value = data.get(key)
         if isinstance(value, list):
             items = [str(item).strip() for item in value if str(item).strip()]
             if items:
                 out[key] = items
-    try:
-        out["importance"] = int(data["importance"])
-    except (KeyError, TypeError, ValueError):
-        pass
     return out
+
+
+# Importance levels for Jev's Score, worded from the user's own definitions
+# (2026-10-14): 5 and 6 are what long-term memory is for; 3 and 4 are project work
+# that changes and is also recorded in issues and specs.
+IMPORTANCE_LEVELS = [
+    "0: noise: a status line, tally or test result with no lasting content",
+    "1: trivial: a bibliographic record, or a report that a commit was made",
+    "2: minor: a detail of one code change or one finished task",
+    "3: working note: a finding, review result or implementation detail from "
+    "current project work",
+    "4: project update: a project design decision, plan or completed piece of "
+    "project work; it is also recorded in the project's issues and specs and may "
+    "change",
+    "5: durable: a lasting fact about the person's setup (machines, hosts, models, "
+    "tools and how they connect), or a preference about what agents should or "
+    "should not do",
+    "6: critical: a goal, deadline, priority or change of direction for the "
+    "person's research or work",
+]
+# Jev reads at most 32k tokens of state plus question; 60k characters stays under
+# that even at 2.36 characters per token, the densest text measured.
+JUDGE_MAX_CHARS = 60_000
+
+
+async def judge_thought(content: str) -> dict:
+    """Ask Jev how important one thought is and which active projects it is about.
+
+    One request holds an importance Score over ``IMPORTANCE_LEVELS`` and a Choice
+    over the active projects plus "none". A Choice beat one yes/no per project on
+    51 labelled thoughts (2026-10-14): 45 exact project sets against at most 35,
+    because a yes/no also says yes to projects on related topics. Returns metadata
+    to merge: ``judge`` keeps the raw answers (model, continuous importance score,
+    the Choice distribution) so a new rule needs no new calls; ``importance`` is
+    the score rounded to a level; ``projects`` holds the top project and any other
+    within ``judge.project_share`` of its probability, or nothing when "none" wins.
+    Raises on any Jev failure, so the caller leaves the thought for a retry.
+    """
+    from typesafe_sdk import AsyncTypeSafeClient, Choice, Score
+
+    projects = await list_projects("active")
+    questions = {
+        "importance": Score(
+            instructions=(
+                "How important is `note` to keep in this person's long-term memory?"
+            ),
+            criteria=IMPORTANCE_LEVELS,
+        )
+    }
+    if projects:
+        questions["project"] = Choice(
+            instructions="Which project's work does `note` record?",
+            criteria={
+                **{p["name"]: p["description"] or p["name"] for p in projects},
+                "none": "none of these projects",
+            },
+        )
+    async with AsyncTypeSafeClient(
+        model=JUDGE_CONFIG["model"], timeout=float(JUDGE_CONFIG.get("timeout", 30))
+    ) as client:
+        response = await client.system_one(
+            state={"note": content[:JUDGE_MAX_CHARS]}, questions=questions
+        )
+    logger.info(
+        "Jev %s judged a thought: %d input tokens",
+        response.model,
+        response.usage.input_tokens,
+    )
+    score = response.scores["importance"].score
+    probabilities = (
+        {k: round(p, 3) for k, p in response.choices["project"].probabilities.items()}
+        if projects
+        else {"none": 1.0}
+    )
+    named = {k: p for k, p in probabilities.items() if k != "none"}
+    picked = []
+    if named and max(named.values()) > probabilities.get("none", 0):
+        floor = float(JUDGE_CONFIG.get("project_share", 0.3)) * max(named.values())
+        picked = sorted(name for name, p in named.items() if p >= floor)
+    return {
+        "judge": {
+            "model": response.model,
+            "importance_score": round(score, 2),
+            "projects": probabilities,
+        },
+        "importance": min(6, int(score + 0.5)),
+        "projects": picked,
+    }
+
+
+async def _merge_thought_metadata(row, derived: dict) -> None:
+    """Merge derived metadata into one thought through ``upsert_thought``.
+
+    Caller-supplied importance is authoritative: if the capturing agent set it,
+    the derived importance is dropped so the merge cannot override it. Otherwise
+    the derived value lands verbatim under the overwrite scalar mode.
+    """
+    existing_meta = row["metadata"] or {}
+    if isinstance(existing_meta, str):
+        existing_meta = json.loads(existing_meta)
+    if existing_meta.get("importance_source") == "caller":
+        derived.pop("importance", None)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Re-run the canonical write path: the fingerprint matches, so this hits
+        # the merge branch (union arrays, enriched OR true) and preserves the
+        # existing embedding. p_type is NULL so the caller's thought type is never
+        # overwritten.
+        await conn.fetchval(
+            "SELECT upsert_thought($1, $2, $3::jsonb, $4, $5)",
+            row["content"],
+            row["embedding"],
+            json.dumps(derived),
+            None,
+            "overwrite",
+        )
 
 
 async def extract_thought_metadata(thought_id: str) -> dict:
     """Derive and merge structured metadata for one thought (the second derivation).
 
-    Loads the thought, prompts the extraction model, and merges the result back
-    through the canonical ``upsert_thought`` path — so caller-supplied metadata is
-    preserved (arrays union; a caller-supplied importance always wins) and
-    ``enriched`` flips true. Newly discovered people/projects get their embeddings
+    Loads the thought, asks the extraction model for tags, people and action items
+    and Jev (``judge_thought``) for importance and projects, and merges the result
+    back through the canonical ``upsert_thought`` path — so caller-supplied
+    metadata is preserved (arrays union; a caller-supplied importance always wins)
+    and ``enriched`` flips true. Newly discovered people/projects get their embeddings
     refreshed and link edges created. A model outage or off-schema output leaves the
     thought a straggler (``enriched=false``) for a later
     ``backfill_thought_extractions`` run — it never writes garbage and never
@@ -797,8 +909,9 @@ async def extract_thought_metadata(thought_id: str) -> dict:
         return {"thought_id": thought_id, "status": "skipped"}
 
     try:
-        raw = await complete_extraction_prompt(
-            _thought_extraction_prompt(row["content"])
+        raw, judged = await asyncio.gather(
+            complete_extraction_prompt(_thought_extraction_prompt(row["content"])),
+            judge_thought(row["content"]),
         )
     except Exception as exc:
         logger.warning("Thought extraction failed for %s: %s", thought_id, exc)
@@ -811,32 +924,9 @@ async def extract_thought_metadata(thought_id: str) -> dict:
         )
         return {"thought_id": thought_id, "status": "error"}
 
-    # Caller-supplied importance is authoritative: if the capturing agent set it,
-    # drop the model's importance so the merge cannot override it. When the caller
-    # left it unset (sparse auto-capture), keep the extracted value so it lands
-    # verbatim under the overwrite scalar mode below.
-    existing_meta = row["metadata"] or {}
-    if isinstance(existing_meta, str):
-        existing_meta = json.loads(existing_meta)
-    if existing_meta.get("importance_source") == "caller":
-        extracted.pop("importance", None)
-
+    extracted.update(judged)
     extracted["enriched"] = True
-    async with pool.acquire() as conn:
-        # Re-run the canonical write path: the fingerprint matches, so this hits
-        # the merge branch (union arrays, enriched OR true) and preserves the
-        # existing embedding. Scalar mode 'overwrite' lets a sparse capture take
-        # the model's importance verbatim (even below the seeded default); a
-        # caller's importance was already stripped above, so it is never sent here.
-        # p_type is NULL so the caller's thought type is never overwritten.
-        await conn.fetchval(
-            "SELECT upsert_thought($1, $2, $3::jsonb, $4, $5)",
-            row["content"],
-            row["embedding"],
-            json.dumps(extracted),
-            None,
-            "overwrite",
-        )
+    await _merge_thought_metadata(row, extracted)
 
     people = extracted.get("people") or []
     projects = extracted.get("projects") or []
@@ -2550,6 +2640,48 @@ async def backfill_thought_extractions(limit: int = 100) -> dict:
         "extracted": extracted,
         "failed": failed,
         "pending_after": pending_before - extracted,
+    }
+
+
+async def backfill_thought_judgments(limit: int = 100) -> dict:
+    """Give enriched thoughts that have no Jev judgment their importance and projects.
+
+    Covers thoughts enriched before ``judge_thought`` existed, and any whose judgment
+    was lost. Unenriched thoughts are left to ``backfill_thought_extractions``,
+    which judges them as part of enrichment. Links projects but skips the entity
+    embedding refresh that new thoughts get, so a large backlog does not re-embed
+    each project once per thought. Re-runnable; failures are retried next run.
+
+    Returns ``{pending_before, judged, failed, pending_after}``.
+    """
+    pool = await get_pool()
+    pending_sql = "FROM thoughts WHERE enriched AND metadata->'judge' IS NULL"
+    async with pool.acquire() as conn:
+        pending_before = await conn.fetchval(f"SELECT count(*) {pending_sql}")
+        rows = await conn.fetch(
+            f"SELECT id, content, embedding, metadata {pending_sql} "
+            "ORDER BY created_at LIMIT $1",
+            limit,
+        )
+
+    judged = 0
+    failed = 0
+    for row in rows:
+        try:
+            derived = await judge_thought(row["content"])
+        except Exception as exc:
+            failed += 1
+            logger.warning("Thought judgment failed for %s: %s", row["id"], exc)
+            continue
+        await _merge_thought_metadata(row, derived)
+        await _link_thought_entities(str(row["id"]), [], derived["projects"])
+        judged += 1
+
+    return {
+        "pending_before": pending_before,
+        "judged": judged,
+        "failed": failed,
+        "pending_after": pending_before - judged,
     }
 
 

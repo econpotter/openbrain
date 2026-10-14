@@ -441,14 +441,22 @@ class ThoughtDerivationTests(unittest.IsolatedAsyncioTestCase):
         )
         refresh = AsyncMock()
         link = AsyncMock()
-        raw = (
-            '{"tags":["sdc"],"people":["Ada"],"projects":["SDC"],'
-            '"action_items":["email Ada"],"importance":5}'
-        )
+        raw = '{"tags":["sdc"],"people":["Ada"],"action_items":["email Ada"]}'
         with (
             patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
             patch.object(
                 brain, "complete_extraction_prompt", AsyncMock(return_value=raw)
+            ),
+            patch.object(
+                brain,
+                "judge_thought",
+                AsyncMock(
+                    return_value={
+                        "judge": {"model": "jev-1.13.0"},
+                        "importance": 5,
+                        "projects": ["SDC"],
+                    }
+                ),
             ),
             patch.object(brain, "_refresh_mentioned_entities", refresh),
             patch.object(brain, "_link_thought_entities", link),
@@ -462,8 +470,10 @@ class ThoughtDerivationTests(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(args[2])
         self.assertTrue(payload["enriched"])
         self.assertEqual(payload["tags"], ["sdc"])
-        # Sparse capture: the caller set no importance, so the model's value lands.
+        # Sparse capture: the caller set no importance, so Jev's value lands, with
+        # the raw judgment kept alongside it.
         self.assertEqual(payload["importance"], 5)
+        self.assertEqual(payload["judge"]["model"], "jev-1.13.0")
         # p_type is NULL so extraction never overwrites the caller's thought type.
         self.assertIsNone(args[3])
         # Scalar mode 'overwrite' lets the extracted importance land verbatim.
@@ -472,7 +482,7 @@ class ThoughtDerivationTests(unittest.IsolatedAsyncioTestCase):
         link.assert_awaited_once_with("thought-1", ["Ada"], ["SDC"])
 
     async def test_extract_preserves_caller_importance(self):
-        # Caller marked a low, deliberate importance; the model wants to raise it.
+        # Caller marked a low, deliberate importance; Jev wants to raise it.
         # The caller's value must win (AC #2), so extraction drops its importance
         # and never sends it to the merge.
         connection = _ExtractConnection(
@@ -483,11 +493,22 @@ class ThoughtDerivationTests(unittest.IsolatedAsyncioTestCase):
                 "metadata": {"importance": 2, "importance_source": "caller"},
             }
         )
-        raw = '{"tags":["ada"],"people":["Ada"],"importance":5}'
+        raw = '{"tags":["ada"],"people":["Ada"]}'
         with (
             patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
             patch.object(
                 brain, "complete_extraction_prompt", AsyncMock(return_value=raw)
+            ),
+            patch.object(
+                brain,
+                "judge_thought",
+                AsyncMock(
+                    return_value={
+                        "judge": {"model": "jev-1.13.0"},
+                        "importance": 5,
+                        "projects": [],
+                    }
+                ),
             ),
             patch.object(brain, "_refresh_mentioned_entities", AsyncMock()),
             patch.object(brain, "_link_thought_entities", AsyncMock()),
@@ -504,7 +525,7 @@ class ThoughtDerivationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["enriched"])
 
     async def test_extract_sparse_importance_can_go_below_default(self):
-        # Sparse capture, model returns an importance below the seeded default.
+        # Sparse capture, Jev returns an importance below the seeded default.
         # 'overwrite' mode must let it land (GREATEST would have pinned it up).
         connection = _ExtractConnection(
             {
@@ -514,11 +535,22 @@ class ThoughtDerivationTests(unittest.IsolatedAsyncioTestCase):
                 "metadata": {"importance": 3},  # seeded default, not caller-set
             }
         )
-        raw = '{"tags":["chatter"],"importance":1}'
+        raw = '{"tags":["chatter"]}'
         with (
             patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(connection))),
             patch.object(
                 brain, "complete_extraction_prompt", AsyncMock(return_value=raw)
+            ),
+            patch.object(
+                brain,
+                "judge_thought",
+                AsyncMock(
+                    return_value={
+                        "judge": {"model": "jev-1.13.0"},
+                        "importance": 1,
+                        "projects": [],
+                    }
+                ),
             ),
             patch.object(brain, "_refresh_mentioned_entities", AsyncMock()),
             patch.object(brain, "_link_thought_entities", AsyncMock()),
@@ -542,6 +574,9 @@ class ThoughtDerivationTests(unittest.IsolatedAsyncioTestCase):
                 "complete_extraction_prompt",
                 AsyncMock(side_effect=RuntimeError("extraction model down")),
             ),
+            patch.object(
+                brain, "judge_thought", AsyncMock(return_value={"importance": 3})
+            ),
         ):
             res = await brain.extract_thought_metadata("thought-1")
 
@@ -558,6 +593,9 @@ class ThoughtDerivationTests(unittest.IsolatedAsyncioTestCase):
                 brain,
                 "complete_extraction_prompt",
                 AsyncMock(return_value="sorry, no structured data here"),
+            ),
+            patch.object(
+                brain, "judge_thought", AsyncMock(return_value={"importance": 3})
             ),
         ):
             res = await brain.extract_thought_metadata("thought-1")
@@ -580,12 +618,15 @@ class ThoughtDerivationTests(unittest.IsolatedAsyncioTestCase):
         prompt.assert_not_awaited()
         self.assertEqual(connection.fetchval_calls, [])
 
-    def test_parse_keeps_arrays_and_coerces_importance(self):
+    def test_parse_keeps_arrays_and_ignores_judged_fields(self):
         out = brain.parse_thought_metadata(
-            'prefix {"tags":["a","b"],"importance":"4","people":[],"junk":1} suffix'
+            'prefix {"tags":["a","b"],"importance":"4","projects":["X"],'
+            '"people":[],"junk":1} suffix'
         )
         self.assertEqual(out["tags"], ["a", "b"])
-        self.assertEqual(out["importance"], 4)
+        # Importance and projects come from judge_thought, never the extraction model.
+        self.assertNotIn("importance", out)
+        self.assertNotIn("projects", out)
         self.assertNotIn("people", out)  # empty array dropped
 
     def test_parse_off_schema_returns_none(self):

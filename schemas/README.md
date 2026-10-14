@@ -9,6 +9,10 @@ core runtime.
 `scripts/setup_db.sh` installs this baseline directly. Once openbrain contains
 real data, later schema changes should use a separate migration mechanism.
 
+`schemas/migrations/` holds one-off SQL that brings a database created from an
+older baseline up to the current one. Each file names the baseline change it
+applies and how to run it.
+
 ## Canonical Thought Writes
 
 `schemas/core/002_thoughts.sql` defines `upsert_thought(...)` as the canonical

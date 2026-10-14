@@ -1,0 +1,13 @@
+# Secrets and local state stay out of the image. A copied .env once overrode
+# the container's DATABASE_URL and baked API keys into image layers.
+.env
+.env.*
+!.env.example
+.git
+.venv
+.worktrees
+.scratch
+**/__pycache__
+*.egg-info
+build
+repomix-output.xml

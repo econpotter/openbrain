@@ -151,8 +151,8 @@ are across papers) can't be judged from assumptions.
 Approach (to be tuned at the checkpoint, not finalized now):
 
 - A resolution pass maps raw `cause_text`/`effect_text` → canonical `variables` nodes via embedding
-  match + a merge threshold; unmatched text mints a new variable. Runs as a **maintenance pass like
-  `backfill_links`**, not inline.
+  match + a merge threshold; unmatched text mints a new variable. Runs as a **maintenance pass**, not
+  inline.
 - Once `cause_var_id`/`effect_var_id` are populated, findings ARE the causal graph: directed edges
   (cause variable → effect variable) owned by a paper, carrying magnitude. Papers relate through
   shared variable nodes.

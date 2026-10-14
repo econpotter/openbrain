@@ -158,21 +158,3 @@ def register(mcp):
             f"{result['pending_after']} still pending "
             f"(of {result['pending_before']} before this run)."
         )
-
-    @mcp.tool
-    async def backfill_links(limit: int = 1000) -> str:
-        """
-        Populate the `links` graph table for thoughts that mention people or
-        projects but have no edges yet (e.g. thoughts captured before graph
-        traversal was added). Safe to re-run.
-
-        Args:
-            limit: Maximum number of thoughts to process in this run.
-        """
-        result = await brain.backfill_links(limit=limit)
-        if result["processed"] == 0:
-            return "No thoughts pending link backfill."
-        return (
-            f"Backfill: {result['processed']} thought(s) processed, "
-            f"{result['linked']} link(s) created."
-        )

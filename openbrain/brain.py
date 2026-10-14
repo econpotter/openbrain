@@ -521,52 +521,6 @@ async def _link_thought_entities(
             )
 
 
-async def backfill_links(limit: int = 1000) -> dict:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT id, metadata FROM thoughts
-            WHERE (metadata->'people' IS NOT NULL OR metadata->'projects' IS NOT NULL)
-              AND NOT EXISTS (
-                  SELECT 1 FROM links
-                  WHERE links.source_table = 'thoughts' AND links.source_id = thoughts.id
-              )
-            ORDER BY created_at
-            LIMIT $1
-            """,
-            limit,
-        )
-
-    processed = 0
-    linked = 0
-    for row in rows:
-        meta = row["metadata"]
-        if isinstance(meta, str):
-            meta = json.loads(meta)
-        people = meta.get("people") or []
-        projects = meta.get("projects") or []
-        if not people and not projects:
-            continue
-        before = await _count_links("thoughts", str(row["id"]))
-        await _link_thought_entities(str(row["id"]), people, projects)
-        after = await _count_links("thoughts", str(row["id"]))
-        linked += after - before
-        processed += 1
-
-    return {"processed": processed, "linked": linked}
-
-
-async def _count_links(table: str, entity_id: str) -> int:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        return await conn.fetchval(
-            "SELECT count(*) FROM links WHERE source_table = $1 AND source_id = $2",
-            table,
-            entity_id,
-        )
-
-
 async def traverse_graph(
     table: str, entity_id: str, depth: int = 2, limit: int = 50
 ) -> list[dict]:

@@ -194,9 +194,7 @@ class SpoolTests(unittest.TestCase):
             spool_mod.enqueue("capture_thought", {"content": "b"}, "t2", spool_dir=d)
             self.assertEqual(spool_mod.depth(d), 2)
             entries = [spool_mod.load(p) for p in spool_mod.pending(d)]
-            self.assertEqual(
-                [e["arguments"]["content"] for e in entries], ["a", "b"]
-            )
+            self.assertEqual([e["arguments"]["content"] for e in entries], ["a", "b"])
 
     def test_cross_process_order_is_by_time_not_pid(self):
         # An older capture from a *higher*-pid process must sort before a newer
@@ -207,12 +205,20 @@ class SpoolTests(unittest.TestCase):
             # Enqueue order: high pid at t=100 (older), then low pid at t=200
             # (newer). Constant patches — os.getpid is also called internally by
             # tempfile, so an iterator would exhaust.
-            with patch.object(spool_mod.os, "getpid", lambda: 9999999), \
-                 patch.object(spool_mod.time, "time_ns", lambda: 100):
-                spool_mod.enqueue("capture_thought", {"content": "older"}, "t1", spool_dir=d)
-            with patch.object(spool_mod.os, "getpid", lambda: 1000000), \
-                 patch.object(spool_mod.time, "time_ns", lambda: 200):
-                spool_mod.enqueue("capture_thought", {"content": "newer"}, "t2", spool_dir=d)
+            with (
+                patch.object(spool_mod.os, "getpid", lambda: 9999999),
+                patch.object(spool_mod.time, "time_ns", lambda: 100),
+            ):
+                spool_mod.enqueue(
+                    "capture_thought", {"content": "older"}, "t1", spool_dir=d
+                )
+            with (
+                patch.object(spool_mod.os, "getpid", lambda: 1000000),
+                patch.object(spool_mod.time, "time_ns", lambda: 200),
+            ):
+                spool_mod.enqueue(
+                    "capture_thought", {"content": "newer"}, "t2", spool_dir=d
+                )
             entries = [spool_mod.load(p) for p in spool_mod.pending(d)]
             self.assertEqual(
                 [e["arguments"]["content"] for e in entries], ["older", "newer"]
@@ -228,7 +234,9 @@ class SpoolTests(unittest.TestCase):
     def test_enqueue_is_atomic_no_temp_leftovers(self):
         with TemporaryDirectory() as tmp:
             d = Path(tmp)
-            path = spool_mod.enqueue("capture_thought", {"content": "a"}, "t1", spool_dir=d)
+            path = spool_mod.enqueue(
+                "capture_thought", {"content": "a"}, "t1", spool_dir=d
+            )
             # Exactly one file exists — the final entry, no stray temp leftovers —
             # and it is always complete, parseable JSON.
             self.assertEqual(list(d.iterdir()), [path])
@@ -255,8 +263,12 @@ class FlushSpoolTests(unittest.TestCase):
             # unguarded flush would abort before reaching the valid entries.
             (d / "0000000-0000.json").write_text('{"tool": "capture_thought", "argum')
             client = self._FakeClient()
-            with patch.object(spool_mod, "pending", lambda *a: sorted(d.glob("*.json"))), \
-                 patch.object(spool_mod, "depth", lambda *a: len(list(d.glob("*.json")))):
+            with (
+                patch.object(spool_mod, "pending", lambda *a: sorted(d.glob("*.json"))),
+                patch.object(
+                    spool_mod, "depth", lambda *a: len(list(d.glob("*.json")))
+                ),
+            ):
                 flushed, remaining = cli_mod._flush_spool(client)
             # Both valid entries flushed despite the malformed file up front.
             self.assertEqual(flushed, 2)
@@ -283,8 +295,10 @@ class SweepSourceLabelTests(unittest.TestCase):
             (codex_dir / "rollout-x.jsonl").write_text(
                 _codex_msg("user", "codex side work") + "\n"
             )
-            with patch.object(cli_mod.state, "get_watermark", return_value=0), \
-                 patch.object(cli_mod.state, "set_watermark"):
+            with (
+                patch.object(cli_mod.state, "get_watermark", return_value=0),
+                patch.object(cli_mod.state, "set_watermark"),
+            ):
                 captured = cli_mod._sweep_transcripts(
                     client, {"claude-code": claude_dir, "codex": codex_dir}
                 )
@@ -295,9 +309,7 @@ class SweepSourceLabelTests(unittest.TestCase):
 
     def test_default_dirs_are_a_labeled_mapping(self):
         # The nightly cron runs `openbrain sweep` with no args → both providers.
-        self.assertEqual(
-            set(cli_mod.DEFAULT_TRANSCRIPT_DIRS), {"claude-code", "codex"}
-        )
+        self.assertEqual(set(cli_mod.DEFAULT_TRANSCRIPT_DIRS), {"claude-code", "codex"})
         self.assertTrue(
             str(cli_mod.DEFAULT_TRANSCRIPT_DIRS["codex"]).endswith(".codex/sessions")
         )
@@ -310,7 +322,14 @@ class CaptureTranscriptCommandTests(unittest.TestCase):
         with patch.dict("os.environ", {}, clear=True):
             result = runner.invoke(
                 cli_mod.app,
-                ["capture-transcript", "--trigger", "stop", "--source", "codex", "--quiet"],
+                [
+                    "capture-transcript",
+                    "--trigger",
+                    "stop",
+                    "--source",
+                    "codex",
+                    "--quiet",
+                ],
             )
 
         self.assertEqual(result.exit_code, 0)
@@ -329,15 +348,24 @@ class CaptureTranscriptCommandTests(unittest.TestCase):
             tpath = nested / f"rollout-2026-07-06T11-18-45-{thread_id}.jsonl"
             tpath.write_text(_codex_msg("user", "capture this codex turn") + "\n")
 
-            with patch.dict("os.environ", {"CODEX_THREAD_ID": thread_id}, clear=True), \
-                 patch.dict(cli_mod.DEFAULT_TRANSCRIPT_DIRS, {"codex": codex_root}), \
-                 patch.object(cli_mod, "load_config", return_value=object()), \
-                 patch.object(cli_mod, "MCPClient", return_value=client), \
-                 patch.object(cli_mod.state, "get_watermark", return_value=0), \
-                 patch.object(cli_mod.state, "set_watermark"):
+            with (
+                patch.dict("os.environ", {"CODEX_THREAD_ID": thread_id}, clear=True),
+                patch.dict(cli_mod.DEFAULT_TRANSCRIPT_DIRS, {"codex": codex_root}),
+                patch.object(cli_mod, "load_config", return_value=object()),
+                patch.object(cli_mod, "MCPClient", return_value=client),
+                patch.object(cli_mod.state, "get_watermark", return_value=0),
+                patch.object(cli_mod.state, "set_watermark"),
+            ):
                 result = runner.invoke(
                     cli_mod.app,
-                    ["capture-transcript", "--trigger", "stop", "--source", "codex", "--quiet"],
+                    [
+                        "capture-transcript",
+                        "--trigger",
+                        "stop",
+                        "--source",
+                        "codex",
+                        "--quiet",
+                    ],
                 )
 
         self.assertEqual(result.exit_code, 0)
@@ -363,14 +391,20 @@ class CaptureTranscriptCommandTests(unittest.TestCase):
                 queued.append((tool, arguments, queued_at))
                 return Path(tmp) / "queued.json"
 
-            with patch.object(cli_mod, "MCPClient", side_effect=AssertionError("no MCP")), \
-                 patch.object(cli_mod.spool, "enqueue", side_effect=enqueue), \
-                 patch.object(cli_mod.state, "get_watermark", return_value=0), \
-                 patch.object(
-                     cli_mod.state,
-                     "set_watermark",
-                     side_effect=lambda session, lines: watermarks.append((session, lines)),
-                 ):
+            with (
+                patch.object(
+                    cli_mod, "MCPClient", side_effect=AssertionError("no MCP")
+                ),
+                patch.object(cli_mod.spool, "enqueue", side_effect=enqueue),
+                patch.object(cli_mod.state, "get_watermark", return_value=0),
+                patch.object(
+                    cli_mod.state,
+                    "set_watermark",
+                    side_effect=lambda session, lines: watermarks.append(
+                        (session, lines)
+                    ),
+                ),
+            ):
                 result = runner.invoke(
                     cli_mod.app,
                     [
@@ -404,9 +438,19 @@ class CaptureTranscriptCommandTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             tpath = Path(tmp) / "rollout-x.jsonl"
             tpath.write_text(_codex_msg("user", "capture despite outage") + "\n")
-            with patch.object(cli_mod, "load_config", side_effect=config_mod.ConfigError("missing")), \
-                 patch.object(cli_mod.spool, "enqueue", side_effect=OSError("read-only")), \
-                 patch.object(cli_mod.state, "set_watermark", side_effect=OSError("read-only")):
+            with (
+                patch.object(
+                    cli_mod,
+                    "load_config",
+                    side_effect=config_mod.ConfigError("missing"),
+                ),
+                patch.object(
+                    cli_mod.spool, "enqueue", side_effect=OSError("read-only")
+                ),
+                patch.object(
+                    cli_mod.state, "set_watermark", side_effect=OSError("read-only")
+                ),
+            ):
                 result = runner.invoke(
                     cli_mod.app,
                     [
@@ -526,7 +570,14 @@ class PackagingGuardTests(unittest.TestCase):
 
 class BriefCommandTests(unittest.TestCase):
     """`openbrain brief` powers the SessionStart hook: it must emit the documented
-    additionalContext envelope on success and nothing (exit 0) on any failure."""
+    additionalContext envelope on success and a systemMessage warning (exit 0)
+    on any failure."""
+
+    def setUp(self):
+        # The real spool lives in the user's home; never let it leak into tests.
+        patcher = patch.object(cli_mod, "_spool_warning", return_value="")
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _run(self, replies=None, raises=None, args=("--cwd", "/tmp/myproj")):
         cfg = config_mod.ClientConfig(url="https://x/mcp", key="k")
@@ -543,20 +594,23 @@ class BriefCommandTests(unittest.TestCase):
 
     def test_emits_additional_context_envelope(self):
         result = self._run(
-            replies={"get_briefing": "BRIEFING — today", "search_brain": "THOUGHTS: ..."}
+            replies={
+                "get_briefing": "BRIEFING — today",
+                "search_brain": "THOUGHTS: ...",
+            }
         )
         self.assertEqual(result.exit_code, 0)
         payload = json.loads(result.stdout)
-        self.assertEqual(
-            payload["hookSpecificOutput"]["hookEventName"], "SessionStart"
-        )
+        self.assertEqual(payload["hookSpecificOutput"]["hookEventName"], "SessionStart")
         ctx = payload["hookSpecificOutput"]["additionalContext"]
         self.assertIn("BRIEFING — today", ctx)
         self.assertIn("THOUGHTS: ...", ctx)
 
     def test_recall_query_inferred_from_cwd(self):
         self._run(replies={"get_briefing": "b", "search_brain": "r"})
-        search_calls = [a for name, a in self._last_client.calls if name == "search_brain"]
+        search_calls = [
+            a for name, a in self._last_client.calls if name == "search_brain"
+        ]
         self.assertEqual(search_calls, [{"query": "myproj"}])
 
     def test_no_content_emits_nothing(self):
@@ -564,10 +618,26 @@ class BriefCommandTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(result.stdout.strip(), "")
 
-    def test_server_failure_is_silent(self):
+    def test_server_failure_warns_the_user(self):
         result = self._run(raises=mcp_mod.MCPError("tunnel down"))
         self.assertEqual(result.exit_code, 0)
-        self.assertEqual(result.stdout.strip(), "")
+        payload = json.loads(result.stdout)
+        self.assertEqual(
+            payload["systemMessage"], "openbrain: briefing failed: tunnel down"
+        )
+
+    def test_stale_spool_warns_alongside_the_briefing(self):
+        with patch.object(
+            cli_mod, "_spool_warning", return_value="openbrain: 9 captures queued"
+        ):
+            result = self._run(
+                replies={"get_briefing": "BRIEFING — today", "search_brain": ""}
+            )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["systemMessage"], "openbrain: 9 captures queued")
+        ctx = payload["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("9 captures queued", ctx)
+        self.assertIn("BRIEFING — today", ctx)
 
     def test_recall_gets_the_remaining_budget_not_a_fresh_one(self):
         # 1.5s elapsed by the time the briefing lands → recall may spend the
@@ -577,7 +647,9 @@ class BriefCommandTests(unittest.TestCase):
             replies={"get_briefing": "b", "search_brain": "r"},
         )
         self.assertEqual(result.exit_code, 0)
-        self.assertEqual([name for name, _ in client.calls], ["get_briefing", "search_brain"])
+        self.assertEqual(
+            [name for name, _ in client.calls], ["get_briefing", "search_brain"]
+        )
         self.assertEqual(client.timeouts, [4.5])
         # The first request is bounded by the same budget, not the old flat 8s.
         self.assertLessEqual(
@@ -589,7 +661,10 @@ class BriefCommandTests(unittest.TestCase):
         # search would only get cut off, and the briefing is the real payload.
         result, client, _ = self._run_budgeted(
             [0.0, 0.0, 5.5],
-            replies={"get_briefing": "BRIEFING — today", "search_brain": "THOUGHTS: ..."},
+            replies={
+                "get_briefing": "BRIEFING — today",
+                "search_brain": "THOUGHTS: ...",
+            },
         )
         self.assertEqual(result.exit_code, 0)
         self.assertEqual([name for name, _ in client.calls], ["get_briefing"])
@@ -636,14 +711,20 @@ class BriefCommandTests(unittest.TestCase):
         ctx = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertEqual(ctx, "BRIEFING — today")
 
-    def test_briefing_failure_is_still_fatal_and_silent(self):
+    def test_briefing_failure_is_fatal_and_warns(self):
         # The inverse: recall is best-effort, the briefing is not. A failed
-        # briefing still emits nothing at all.
+        # briefing gives the model only the warning, never a partial context.
         result = self._run(
-            replies={"get_briefing": mcp_mod.MCPError("tunnel down"), "search_brain": "r"}
+            replies={
+                "get_briefing": mcp_mod.MCPError("tunnel down"),
+                "search_brain": "r",
+            }
         )
         self.assertEqual(result.exit_code, 0)
-        self.assertEqual(result.stdout.strip(), "")
+        payload = json.loads(result.stdout)
+        warning = "openbrain: briefing failed: tunnel down"
+        self.assertEqual(payload["systemMessage"], warning)
+        self.assertEqual(payload["hookSpecificOutput"]["additionalContext"], warning)
 
     def _run_budgeted(self, clock_readings, replies):
         """Invoke `brief` with a scripted clock. Returns (result, client, mock).
@@ -654,9 +735,11 @@ class BriefCommandTests(unittest.TestCase):
         cfg = config_mod.ClientConfig(url="https://x/mcp", key="k")
         client = _FakeClient(replies)
         runner = CliRunner()
-        with patch.object(cli_mod, "time", _fake_time(clock_readings)), \
-             patch.object(cli_mod, "load_config", return_value=cfg) as load_config, \
-             patch.object(cli_mod, "MCPClient", return_value=client):
+        with (
+            patch.object(cli_mod, "time", _fake_time(clock_readings)),
+            patch.object(cli_mod, "load_config", return_value=cfg) as load_config,
+            patch.object(cli_mod, "MCPClient", return_value=client),
+        ):
             result = runner.invoke(cli_mod.app, ["brief", "--cwd", "/tmp/myproj"])
         return result, client, load_config
 

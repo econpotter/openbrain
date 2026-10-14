@@ -29,13 +29,16 @@ uses and spools captures locally when the deployment is unreachable.
    ```
 
 2. **Bearer token** — the plugin's `.mcp.json` reads it from the environment; it
-   is never committed. Export it where Claude Code (and the hook shells) can see
-   it, e.g. in your shell profile:
+   is never committed. Keep the URL and key in `~/.openbrain/env` (mode 600),
+   which the nightly sweep timer also reads, and load it in your shell profile:
 
    ```bash
-   export OPENBRAIN_MCP_KEY="<bearer token>"
-   # optional: point at your deployment endpoint (replace with your deployment's URL)
-   export OPENBRAIN_MCP_URL="https://openbrain.example.com:8443/mcp"
+   # ~/.openbrain/env
+   OPENBRAIN_MCP_URL=https://openbrain.example.com:8443/mcp
+   OPENBRAIN_MCP_KEY=<bearer token>
+
+   # shell profile
+   [[ -r ~/.openbrain/env ]] && { set -a; source ~/.openbrain/env; set +a; }
    ```
 
 3. **Add the marketplace and enable the plugin.** This repo doubles as its own

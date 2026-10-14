@@ -75,7 +75,8 @@ def _codex_line_text(obj: dict) -> str:
     parts = [
         str(block.get("text", "")).strip()
         for block in content
-        if isinstance(block, dict) and block.get("type") in ("input_text", "output_text")
+        if isinstance(block, dict)
+        and block.get("type") in ("input_text", "output_text")
     ]
     body = "\n".join(p for p in parts if p)
     if not body:
@@ -96,7 +97,9 @@ def _line_text(line: str) -> str:
     if not isinstance(obj, dict):
         return ""
     # Claude Code: flat user/assistant line with a sibling `message` dict.
-    if obj.get("type") in ("user", "assistant") and isinstance(obj.get("message"), dict):
+    if obj.get("type") in ("user", "assistant") and isinstance(
+        obj.get("message"), dict
+    ):
         return _claude_line_text(obj)
     # Codex: a `response_item` wrapping a `payload` message.
     if obj.get("type") == "response_item":
@@ -117,3 +120,21 @@ def read_delta(transcript_path: str | Path, watermark: int) -> Delta:
     delta_lines = lines[watermark:] if watermark < total else []
     texts = [t for t in (_line_text(line) for line in delta_lines) if t]
     return Delta(text="\n\n".join(texts), total_lines=total)
+
+
+def read_last_reply(transcript_path: str | Path) -> str:
+    """Return the agent's text from its most recent reply, or "".
+
+    Walks back from the end, skipping any user line already written for the
+    current prompt, then joins assistant text lines until the user line before
+    them. Never raises on a bad line.
+    """
+    path = Path(transcript_path).expanduser()
+    reply: list[str] = []
+    for line in reversed(path.read_text(errors="replace").splitlines()):
+        text = _line_text(line)
+        if text.startswith("assistant: "):
+            reply.append(text.removeprefix("assistant: "))
+        elif text.startswith("user: ") and reply:
+            break
+    return "\n\n".join(reversed(reply))

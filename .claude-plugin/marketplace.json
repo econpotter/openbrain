@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "openbrain personal memory for Claude Code.",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "plugins": [
     {
       "name": "openbrain",
       "source": "./integrations/claude-code",
-      "description": "openbrain memory in every session: MCP tools, openbrain:* skills, SessionStart push-recall, and Stop/PreCompact capture."
+      "description": "openbrain memory in every session: MCP tools, openbrain:* skills, SessionStart push-recall, and a prompt friction check."
     }
   ]
 }

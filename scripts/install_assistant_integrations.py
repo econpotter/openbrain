@@ -91,13 +91,19 @@ def merge_codex_hooks() -> bool:
     existing_hooks = existing.setdefault("hooks", {})
 
     changed = False
-    for event, entries in incoming.items():
+    # Every event, shipped or not: an event openbrain no longer ships (Stop,
+    # PreCompact) loses its old openbrain entries too.
+    for event in sorted(set(incoming) | set(existing_hooks)):
         current = existing_hooks.get(event, [])
         kept = [e for e in current if not is_openbrain_entry(e)]
-        merged = kept + entries
-        if merged != current:
+        merged = kept + incoming.get(event, [])
+        if merged == current:
+            continue
+        if merged:
             existing_hooks[event] = merged
-            changed = True
+        else:
+            del existing_hooks[event]
+        changed = True
 
     # Sweep out our own dead prompt-type entries left by an older installer at
     # legacy top-level event keys (session_start, pre_compact, ...). Only
@@ -107,7 +113,9 @@ def merge_codex_hooks() -> bool:
         entries = existing.get(event)
         if event == "hooks" or not isinstance(entries, list):
             continue
-        kept = [e for e in entries if not (isinstance(e, dict) and is_openbrain_entry(e))]
+        kept = [
+            e for e in entries if not (isinstance(e, dict) and is_openbrain_entry(e))
+        ]
         if kept != entries:
             if kept:
                 existing[event] = kept
@@ -206,7 +214,10 @@ def merge_codex_mcp() -> str:
         path.write_text(new_text)
         return "added"
 
-    if ob.get("bearer_token_env_var") == MCP_KEY_ENV_VAR and ob.get("url") == target_url:
+    if (
+        ob.get("bearer_token_env_var") == MCP_KEY_ENV_VAR
+        and ob.get("url") == target_url
+    ):
         return "unchanged"
 
     new_text = _rewrite_mcp_block(text, target_url)
@@ -245,7 +256,9 @@ def main() -> None:
     codex_changed = merge_codex_hooks()
     skills = copy_skills()
 
-    print("Claude Code:       install via the plugin (integrations/claude-code/README.md)")
+    print(
+        "Claude Code:       install via the plugin (integrations/claude-code/README.md)"
+    )
     print(f"Codex MCP server:  {codex_mcp}")
     print(f"Codex hooks:       {'updated' if codex_changed else 'already up to date'}")
     print(f"Skills installed/updated for codex, cursor: {', '.join(skills)}")

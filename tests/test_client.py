@@ -278,43 +278,6 @@ class FlushSpoolTests(unittest.TestCase):
             self.assertTrue((d / "0000000-0000.json").exists())
 
 
-class SweepSourceLabelTests(unittest.TestCase):
-    """One sweep pass must tag Codex and Claude Code sessions with distinct
-    sources, driven by the {source_label: dir} mapping (criterion 4)."""
-
-    def test_each_dir_tags_its_own_source(self):
-        client = _FakeClient({})
-        with TemporaryDirectory() as tmp:
-            claude_dir = Path(tmp) / "claude"
-            codex_dir = Path(tmp) / "codex"
-            claude_dir.mkdir()
-            codex_dir.mkdir()
-            (claude_dir / "sess-c.jsonl").write_text(
-                _line("user", "user", "claude side work") + "\n"
-            )
-            (codex_dir / "rollout-x.jsonl").write_text(
-                _codex_msg("user", "codex side work") + "\n"
-            )
-            with (
-                patch.object(cli_mod.state, "get_watermark", return_value=0),
-                patch.object(cli_mod.state, "set_watermark"),
-            ):
-                captured = cli_mod._sweep_transcripts(
-                    client, {"claude-code": claude_dir, "codex": codex_dir}
-                )
-        self.assertEqual(captured, 2)
-        by_session = {a["session_id"]: a["source"] for _, a in client.calls}
-        self.assertEqual(by_session["sess-c"], "claude-code")
-        self.assertEqual(by_session["rollout-x"], "codex")
-
-    def test_default_dirs_are_a_labeled_mapping(self):
-        # The nightly cron runs `openbrain sweep` with no args → both providers.
-        self.assertEqual(set(cli_mod.DEFAULT_TRANSCRIPT_DIRS), {"claude-code", "codex"})
-        self.assertTrue(
-            str(cli_mod.DEFAULT_TRANSCRIPT_DIRS["codex"]).endswith(".codex/sessions")
-        )
-
-
 class CaptureTranscriptCommandTests(unittest.TestCase):
     def test_quiet_missing_context_emits_nothing(self):
         runner = CliRunner()
@@ -350,7 +313,7 @@ class CaptureTranscriptCommandTests(unittest.TestCase):
 
             with (
                 patch.dict("os.environ", {"CODEX_THREAD_ID": thread_id}, clear=True),
-                patch.dict(cli_mod.DEFAULT_TRANSCRIPT_DIRS, {"codex": codex_root}),
+                patch.object(cli_mod, "CODEX_SESSIONS", codex_root),
                 patch.object(cli_mod, "load_config", return_value=object()),
                 patch.object(cli_mod, "MCPClient", return_value=client),
                 patch.object(cli_mod.state, "get_watermark", return_value=0),

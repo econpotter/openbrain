@@ -2,7 +2,7 @@
 
 One `enabledPlugins` entry gives every Claude Code session, in any directory,
 the openbrain MCP tools, the `openbrain:*` skills, push-recall at session start,
-and deterministic capture at Stop / PreCompact. It replaces the old
+and a friction check on each prompt. It replaces the old
 `scripts/install_assistant_integrations.py` Claude Code path and the dead
 prompt-type hooks in `docs/hooks/`.
 
@@ -12,7 +12,7 @@ prompt-type hooks in `docs/hooks/`.
 |---|---|---|
 | MCP server | `.mcp.json` | Registers `openbrain` (streamable HTTP) in **every** session, regardless of cwd. Fixes the `~/.mcp.json` `$HOME`-scope failure. |
 | Skills | `skills/openbrain-*` (symlinks to `../../skills/`) | Load as `openbrain:*` in a fresh session. Fixes the nested `custom-skills/` failure. |
-| Hooks | `hooks/hooks.json` | `SessionStart` → `openbrain brief` (push recall via `additionalContext`); `Stop` / `PreCompact` → `openbrain capture-transcript`. All `"type": "command"`, all fail-soft. |
+| Hooks | `hooks/hooks.json` | `SessionStart` → `openbrain brief` (push recall via `additionalContext`); `UserPromptSubmit` → `openbrain friction` (queues the prompt; the server stores it only when Jev judges it a friction). All `"type": "command"`, all fail-soft. |
 
 The heavy logic stays server-side. The hooks call the thin `openbrain` CLI
 (Plan H), which speaks MCP to the same `:8443/mcp` endpoint every other client

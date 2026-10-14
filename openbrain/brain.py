@@ -809,6 +809,35 @@ async def judge_thought(content: str) -> dict:
     }
 
 
+async def judge_friction(agent: str, user: str) -> float:
+    """Ask Jev how likely the user's turn expresses frustration with the agent.
+
+    `agent` is the agent's text just before the turn. The wording beat a
+    narrower "complaining about how the agent behaved" question on 31 labelled
+    turns (2026-10-14, .scratch/openbrain-capture/trial_friction.py): at 0.65 it
+    flagged 13 of 15 frictions and 1 of 16 other turns. Raises on Jev failure.
+    """
+    from typesafe_sdk import AsyncTypeSafeClient, Noul
+
+    question = Noul(
+        instructions=(
+            "Does the person writing `user` express frustration or annoyance with "
+            "the agent's behavior in `agent`?"
+        )
+    )
+    async with AsyncTypeSafeClient(
+        model=JUDGE_CONFIG["model"], timeout=float(JUDGE_CONFIG.get("timeout", 30))
+    ) as client:
+        response = await client.system_one(
+            state={
+                "agent": agent[-JUDGE_MAX_CHARS // 2 :],
+                "user": user[: JUDGE_MAX_CHARS // 2],
+            },
+            questions={"friction": question},
+        )
+    return response.nouls["friction"].noul
+
+
 async def _merge_thought_metadata(row, derived: dict) -> None:
     """Merge derived metadata into one thought through ``upsert_thought``.
 

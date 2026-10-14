@@ -2,8 +2,7 @@
 Description=Run the openbrain thin-client sweep nightly
 
 [Timer]
-# Nightly capture-side sweep: flush any spooled captures and capture sessions
-# whose transcripts advanced without a Stop/PreCompact hook firing.
+# Nightly sweep: send spooled captures, including the friction check's queue.
 OnCalendar=*-*-* 03:30:00
 Persistent=true
 

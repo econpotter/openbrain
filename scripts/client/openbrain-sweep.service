@@ -10,6 +10,7 @@ Type=oneshot
 # ~/.openbrain/config.yaml; the optional env file below can carry the key.
 EnvironmentFile=-%h/.openbrain/env
 ExecStart=%h/.local/bin/openbrain sweep
+ExecStart=%h/.local/bin/openbrain sync-projects
 StandardOutput=journal
 StandardError=journal
 

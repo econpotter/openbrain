@@ -14,22 +14,26 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 STACK_DIR="$(dirname "$PROJECT_DIR")"
 
-# Load .env. Standalone installs keep secrets in openbrain/.env; the Docker
-# stack keeps them one directory up, next to docker-compose.yaml.
-ENV_FILE=""
-if [ -f "$PROJECT_DIR/.env" ]; then
-    ENV_FILE="$PROJECT_DIR/.env"
-elif [ -f "$STACK_DIR/.env" ]; then
-    ENV_FILE="$STACK_DIR/.env"
-fi
+# Load .env unless the environment already supplies DATABASE_URL, as the
+# maintenance container does. Standalone installs keep secrets in
+# openbrain/.env; the Docker stack keeps them one directory up, next to
+# docker-compose.yaml.
+if [ -z "${DATABASE_URL:-}" ]; then
+    ENV_FILE=""
+    if [ -f "$PROJECT_DIR/.env" ]; then
+        ENV_FILE="$PROJECT_DIR/.env"
+    elif [ -f "$STACK_DIR/.env" ]; then
+        ENV_FILE="$STACK_DIR/.env"
+    fi
 
-if [ -n "$ENV_FILE" ]; then
-    set -o allexport
-    source "$ENV_FILE"
-    set +o allexport
-else
-    echo "ERROR: .env not found at $PROJECT_DIR/.env or $STACK_DIR/.env"
-    exit 1
+    if [ -n "$ENV_FILE" ]; then
+        set -o allexport
+        source "$ENV_FILE"
+        set +o allexport
+    else
+        echo "ERROR: DATABASE_URL is unset and no .env at $PROJECT_DIR/.env or $STACK_DIR/.env"
+        exit 1
+    fi
 fi
 
 if [ -z "${DATABASE_URL:-}" ] && [ -n "${POSTGRES_PASSWORD:-}" ]; then

@@ -14,6 +14,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 STACK_DIR="$(dirname "$PROJECT_DIR")"
 
+# Path overrides come only from the caller's environment (the maintenance
+# container sets them). Read them before .env is sourced, so a container path
+# left in .env never redirects a backup run on the host.
+BACKUP_PATH_OVERRIDE="${OPENBRAIN_BACKUP_PATH:-}"
+LIBRARY_PATH_OVERRIDE="${OPENBRAIN_LIBRARY_PATH:-}"
+
 # Load .env unless the environment already supplies DATABASE_URL, as the
 # maintenance container does. Standalone installs keep secrets in
 # openbrain/.env; the Docker stack keeps them one directory up, next to
@@ -72,8 +78,8 @@ PY
 # maintenance container the host dir is bind-mounted elsewhere (e.g. host
 # /mnt/data → container /data). When set, these env vars point the backup at
 # the mounted paths — same mechanism as OPENBRAIN_LIBRARY_PATH for ingest.
-BACKUP_DIR="${OPENBRAIN_BACKUP_PATH:-$BACKUP_DIR}"
-LIBRARY_PATH="${OPENBRAIN_LIBRARY_PATH:-$LIBRARY_PATH}"
+BACKUP_DIR="${BACKUP_PATH_OVERRIDE:-$BACKUP_DIR}"
+LIBRARY_PATH="${LIBRARY_PATH_OVERRIDE:-$LIBRARY_PATH}"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 

@@ -1347,7 +1347,10 @@ async def find_project_by_name(name: str) -> list[dict]:
             "WHERE name ILIKE $1 ORDER BY name",
             f"%{name}%",
         )
-    return [dict(r) for r in rows]
+    # An exact name wins over substring matches, so "agio" still finds agio
+    # once agio-engine exists.
+    exact = [dict(r) for r in rows if r["name"].lower() == name.lower()]
+    return exact or [dict(r) for r in rows]
 
 
 async def get_project_profile(name: str) -> dict | None:

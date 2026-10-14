@@ -40,6 +40,11 @@ embed:
   # the vector geometry, so re-embed existing rows after editing them.
   document_prefix: "search_document: "
   query_prefix: "search_query: "
+  # Characters kept from the prefixed text before embedding. llama.cpp rejects
+  # input longer than nomic's 2048-token context rather than truncating it.
+  # 4800 = 2040 tokens x 2.36 chars/token, the lowest ratio measured on stored
+  # thoughts, so every text fits. Typical text runs ~3.5 chars/token.
+  max_input_chars: 4800
 
 rerank:
   # Cross-encoder reranking of search candidates: cosine retrieves a candidate

@@ -72,6 +72,7 @@ async def run_blocking(func: Callable):
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(_BLOCKING_EXECUTOR, func)
 
+
 DATABASE_URL: str = os.environ["DATABASE_URL"]
 # library_path in config.yaml is the host-side path (used by scripts/backup.sh,
 # which runs on the host). Inside the Docker container the same files are bind-
@@ -280,6 +281,11 @@ def _apply_task_prefix(text: str, task: str) -> str:
 
 async def embed(text: str, task: str = "document") -> list[float]:
     text = _apply_task_prefix(text, task)
+    # The embed server rejects input longer than its context instead of
+    # truncating it, so cut here. Unset means no cut.
+    max_chars = _cfg["embed"].get("max_input_chars")
+    if max_chars:
+        text = text[:max_chars]
     errors = []
     for config in _configs_with_fallback(_cfg["embed"]):
         try:
@@ -791,14 +797,18 @@ async def extract_thought_metadata(thought_id: str) -> dict:
         return {"thought_id": thought_id, "status": "skipped"}
 
     try:
-        raw = await complete_extraction_prompt(_thought_extraction_prompt(row["content"]))
+        raw = await complete_extraction_prompt(
+            _thought_extraction_prompt(row["content"])
+        )
     except Exception as exc:
         logger.warning("Thought extraction failed for %s: %s", thought_id, exc)
         return {"thought_id": thought_id, "status": "error"}
 
     extracted = parse_thought_metadata(raw)
     if extracted is None:
-        logger.warning("Thought extraction returned off-schema output for %s", thought_id)
+        logger.warning(
+            "Thought extraction returned off-schema output for %s", thought_id
+        )
         return {"thought_id": thought_id, "status": "error"}
 
     # Caller-supplied importance is authoritative: if the capturing agent set it,
@@ -1774,8 +1784,13 @@ async def ingest_document_pipeline(
                 WHERE id = $1
                 RETURNING id, title
                 """,
-                upgrade_id, str(dest), file_hash, doc_type, abstract,
-                bibtex, venue_abbrev,
+                upgrade_id,
+                str(dest),
+                file_hash,
+                doc_type,
+                abstract,
+                bibtex,
+                venue_abbrev,
             )
             await conn.execute("DELETE FROM chunks WHERE library_id = $1", upgrade_id)
             await conn.execute("DELETE FROM findings WHERE paper_id = $1", upgrade_id)
@@ -2760,9 +2775,7 @@ async def search_findings(
     ]
 
 
-_LIBRARY_COLS = (
-    "id, title, authors, year, source, doc_type, filepath, doi, abstract"
-)
+_LIBRARY_COLS = "id, title, authors, year, source, doc_type, filepath, doi, abstract"
 
 
 def _surnames(authors) -> set[str]:
@@ -2839,8 +2852,7 @@ async def resolve_reference(
     if title:
         threshold = papers.MATCH_THRESHOLD if min_score is None else min_score
         scored = [
-            (r, papers.score_row(title, r, year=year, authors=authors))
-            for r in cands
+            (r, papers.score_row(title, r, year=year, authors=authors)) for r in cands
         ]
         cands = [
             r
@@ -3435,9 +3447,7 @@ async def export_bibtex_records(
     """Concatenated .bib for the matching library rows. Prefers each row's stored
     bibtex blob (re-keyed to the stable citekey), else renders a minimal entry.
     Citekey collisions get appended letters."""
-    rows = await query_library_struct(
-        venue=venue, year_min=year_min, limit=10000
-    )
+    rows = await query_library_struct(venue=venue, year_min=year_min, limit=10000)
     seen: dict[str, int] = {}
     out: list[str] = []
     for rec in rows:

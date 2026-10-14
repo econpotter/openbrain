@@ -82,7 +82,10 @@ class _IngestConnection:
         if "SELECT id FROM library WHERE lower(title)" in query:
             return getattr(self, "title_upgrade", None)
         if "UPDATE library SET" in query:
-            return {"id": getattr(self, "upgrade_id", "library-up"), "title": args[0] if args else "T"}
+            return {
+                "id": getattr(self, "upgrade_id", "library-up"),
+                "title": args[0] if args else "T",
+            }
         if "INSERT INTO library" in query:
             row = {"id": "library-1", "title": args[0], "filepath": args[6]}
             self.library_records[args[7]] = row
@@ -296,9 +299,7 @@ class StoreThoughtTests(unittest.IsolatedAsyncioTestCase):
         # Completed task is discarded from the registry (no leak).
         self.assertEqual(brain._background_tasks, set())
         # Its exception was logged loudly, not silently dropped.
-        self.assertTrue(
-            any("extract_thought_metadata" in line for line in cm.output)
-        )
+        self.assertTrue(any("extract_thought_metadata" in line for line in cm.output))
 
     async def test_capture_tool_exposes_structured_metadata(self):
         mcp = _Mcp()
@@ -613,9 +614,7 @@ class ThoughtDerivationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(connection.updates), 2)
 
     async def test_backfill_thought_extractions_tallies_outcomes(self):
-        connection = _BackfillConnection(
-            pending=2, rows=[{"id": "t1"}, {"id": "t2"}]
-        )
+        connection = _BackfillConnection(pending=2, rows=[{"id": "t1"}, {"id": "t2"}])
         extract = AsyncMock(
             side_effect=[
                 {"thought_id": "t1", "status": "done"},
@@ -774,6 +773,27 @@ class ModelFallbackTests(unittest.IsolatedAsyncioTestCase):
             await brain.embed("hello", task="query")
 
         self.assertEqual(sent, ["search_document: hello", "search_query: hello"])
+
+    async def test_embed_cuts_prefixed_text_to_max_input_chars(self):
+        embed_config = {
+            "provider": "litellm",
+            "model": "nomic",
+            "document_prefix": "doc: ",
+            "max_input_chars": 8,
+        }
+        sent = []
+
+        async def _embed(text, _config):
+            sent.append(text)
+            return [0.0]
+
+        with (
+            patch.object(brain, "_cfg", {"embed": embed_config}),
+            patch.object(brain, "_embed_with_config", _embed),
+        ):
+            await brain.embed("hello world", task="document")
+
+        self.assertEqual(sent, ["doc: hel"])
 
     async def test_embed_without_prefix_config_is_noop(self):
         embed_config = {"provider": "litellm", "model": "voyage-style"}
@@ -1487,8 +1507,9 @@ class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["mode"], "batch")
         self.assertEqual(payload["summary"]["fetched"], 1)
         self.assertEqual(payload["summary"]["not_found"], 1)
-        self.assertEqual([r["identifier"] for r in payload["results"]],
-                         ["10.1/a", "10.1/c"])
+        self.assertEqual(
+            [r["identifier"] for r in payload["results"]], ["10.1/a", "10.1/c"]
+        )
 
     async def test_backfill_embeds_null_chunks_and_counts(self):
         connection = _BackfillConnection(
@@ -2373,13 +2394,17 @@ class DeletePaperTests(unittest.IsolatedAsyncioTestCase):
     async def test_deletes_by_uuid(self):
         conn = _DeleteConnection(row={"id": "u-1", "title": "T"})
         with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
-            res = await brain.delete_paper(paper_id="11111111-1111-1111-1111-111111111111")
+            res = await brain.delete_paper(
+                paper_id="11111111-1111-1111-1111-111111111111"
+            )
         self.assertEqual(res, {"deleted": 1, "id": "u-1", "title": "T"})
 
     async def test_uuid_no_match(self):
         conn = _DeleteConnection(row=None)
         with patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))):
-            res = await brain.delete_paper(paper_id="11111111-1111-1111-1111-111111111111")
+            res = await brain.delete_paper(
+                paper_id="11111111-1111-1111-1111-111111111111"
+            )
         self.assertEqual(res, {"deleted": 0, "reason": "no match"})
 
     async def test_deletes_by_reference_single_match(self):
@@ -2387,7 +2412,8 @@ class DeletePaperTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))),
             patch.object(
-                brain, "resolve_reference",
+                brain,
+                "resolve_reference",
                 AsyncMock(return_value=[{"id": "u-9", "title": "A Paper"}]),
             ),
         ):
@@ -2400,10 +2426,14 @@ class DeletePaperTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(brain, "get_pool", AsyncMock(return_value=_Pool(conn))),
             patch.object(
-                brain, "resolve_reference",
-                AsyncMock(return_value=[
-                    {"id": "u-1", "title": "A"}, {"id": "u-2", "title": "B"},
-                ]),
+                brain,
+                "resolve_reference",
+                AsyncMock(
+                    return_value=[
+                        {"id": "u-1", "title": "A"},
+                        {"id": "u-2", "title": "B"},
+                    ]
+                ),
             ),
         ):
             res = await brain.delete_paper(title="shared")
@@ -2454,8 +2484,12 @@ class GetCitationsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_doi_less_forwards_title_descriptor(self):
         conn = _DeleteConnection(
-            row={"doi": None, "title": "Endogenous Property Rights",
-                 "authors": ["Jane Doe"], "year": 2011}
+            row={
+                "doi": None,
+                "title": "Endogenous Property Rights",
+                "authors": ["Jane Doe"],
+                "year": 2011,
+            }
         )
         captured = {}
 
@@ -2483,7 +2517,9 @@ class GetCitationsTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(brain.papers, "citation_neighbors", fake):
             out = await brain.get_citations("https://doi.org/10.1257/AER.123")
-        self.assertEqual(captured["doi"], "10.1257/aer.123")  # prefix stripped, lowercased
+        self.assertEqual(
+            captured["doi"], "10.1257/aer.123"
+        )  # prefix stripped, lowercased
         self.assertEqual(out, [])
 
 

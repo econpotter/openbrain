@@ -80,8 +80,8 @@ Metadata-only records reuse the existing `library` + `chunks` tables:
   substituting a different model, whose vectors would be geometrically incompatible with
   the index. The fallback strategy is "defer and re-embed with the same model," not "embed
   with another model."
-- A `type: ingest_event` thought is routed through `store_thought`, so fetched papers
-  appear in `browse_recent` / `get_briefing` / `search_brain` like file ingests.
+- No thought is stored. The `library` row is the record of the paper; search it with
+  `search_library`.
 
 `force=True` deletes the existing DOI-matched record (cascading to its chunks) and
 re-fetches.

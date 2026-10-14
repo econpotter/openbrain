@@ -1841,18 +1841,6 @@ async def ingest_document_pipeline(
 
     await _extract_findings_inline(library_id)
 
-    author_str = " & ".join(authors) if authors else "Unknown"
-    thought = f"Ingested: {author_str} {year or ''} — {title}".strip()
-    await store_thought(
-        thought,
-        {
-            "type": "ingest_event",
-            "source": "mcp",
-            "people": authors,
-            "doc_type": doc_type,
-        },
-    )
-
     return {
         "id": str(library_id),
         "title": title,
@@ -1998,18 +1986,6 @@ async def _store_paper(
     await _extract_findings_inline(library_id)
 
     authors = meta.get("authors") or []
-    author_str = " & ".join(authors) if authors else "Unknown"
-    thought = f"Fetched: {author_str} {meta.get('year') or ''} — {row['title']}".strip()
-    await store_thought(
-        thought,
-        {
-            "type": "ingest_event",
-            "source": "mcp",
-            "people": authors,
-            "doc_type": doc_type,
-        },
-    )
-
     return {
         "id": str(library_id),
         "title": row["title"],

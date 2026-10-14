@@ -1024,7 +1024,7 @@ class IngestPipelineTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(staged_file.exists())
             self.assertTrue(outside_file.exists())
 
-    async def test_document_ingest_routes_event_through_store_thought(self):
+    async def test_document_ingest_stores_no_thought(self):
         connection = _IngestConnection()
         store_thought = AsyncMock(return_value="thought-1")
         with tempfile.TemporaryDirectory() as tempdir:
@@ -1045,10 +1045,8 @@ class IngestPipelineTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertEqual(result["title"], "A Paper")
-        store_thought.assert_awaited_once()
-        content, metadata = store_thought.await_args.args
-        self.assertIn("Ingested:", content)
-        self.assertEqual(metadata["type"], "ingest_event")
+        # The library row is the record of the document; no thought duplicates it.
+        store_thought.assert_not_awaited()
 
     async def test_ingest_upgrades_abstract_only_record_in_place(self):
         # An abstract-only record (from fetch_paper) exists for this title; the
@@ -1221,7 +1219,7 @@ class ChunkingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
-    async def test_store_paper_inserts_record_abstract_chunk_and_event(self):
+    async def test_store_paper_inserts_record_and_abstract_chunk_only(self):
         connection = _PaperConnection(existing=None)
         store_thought = AsyncMock(return_value="thought-1")
         meta = {
@@ -1252,9 +1250,8 @@ class FetchPaperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(chunk_inserts), 1)
         self.assertEqual(chunk_inserts[0][1][1], "The abstract.")  # content arg
         self.assertIn("'abstract'", chunk_inserts[0][0])  # kind in SQL
-        content, metadata = store_thought.await_args.args
-        self.assertIn("Fetched:", content)
-        self.assertEqual(metadata["type"], "ingest_event")
+        # The library row is the record of the paper; no thought duplicates it.
+        store_thought.assert_not_awaited()
 
     async def test_store_paper_dedups_existing_doi_without_insert(self):
         connection = _PaperConnection(existing={"id": "library-1", "title": "A Paper"})

@@ -118,8 +118,8 @@ async def run(args: argparse.Namespace) -> dict:
     pool = await brain.get_pool()
 
     registry = _read_registry(Path(args.projects).expanduser())
-    for name, purpose in registry.items():
-        await brain.add_project(name, purpose)
+    for name, entry in registry.items():
+        await brain.add_project(name, entry["description"])
     print(f"Loaded {len(registry)} active projects from {args.projects}")
 
     new, old = thoughts[: args.new], thoughts[args.new :]

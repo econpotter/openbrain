@@ -11,12 +11,14 @@ Subcommands:
     brief               briefing + project-relevant recall (for SessionStart)
     sweep               flush the spool, then capture any lagging session
     status              connectivity + spool depth + watermark summary
+    sync-projects       mirror the workspace PROJECTS.md into the projects table
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import select
 import sys
 import time
@@ -453,6 +455,128 @@ def sweep(
         f"captured {captured} lagging session(s)."
     )
     raise typer.Exit(0)
+
+
+DEFAULT_PROJECTS_FILE = Path("~/workspace/PROJECTS.md")
+
+# One line of the server's list_projects reply: `name [status] — description`.
+_PROJECT_LINE = re.compile(
+    r"^(.+?) \[(active|paused|completed|archived)\](?: — (.*))?$"
+)
+
+
+def _read_registry(path: Path) -> dict[str, str]:
+    """Read {name: Purpose} from PROJECTS.md, joining wrapped Purpose lines."""
+    registry: dict[str, str] = {}
+    name = None
+    in_purpose = False
+    for line in path.read_text().splitlines():
+        if line.startswith("## "):
+            name = line[3:].strip()
+            registry[name] = ""
+            in_purpose = False
+        elif name and line.startswith("- Purpose:"):
+            registry[name] = line.removeprefix("- Purpose:").strip()
+            in_purpose = True
+        elif name and in_purpose and line.startswith((" ", "\t")) and line.strip():
+            registry[name] += " " + line.strip()
+        else:
+            in_purpose = False
+    return registry
+
+
+def _parse_projects(reply: str) -> dict[str, tuple[str, str]]:
+    """Parse list_projects text into {name: (status, description)}."""
+    projects: dict[str, tuple[str, str]] = {}
+    last = None
+    for line in reply.splitlines():
+        match = _PROJECT_LINE.match(line)
+        if match:
+            last = match.group(1)
+            projects[last] = (match.group(2), match.group(3) or "")
+        elif last:  # continuation of a multi-line description
+            status, description = projects[last]
+            projects[last] = (status, f"{description}\n{line}")
+    return projects
+
+
+@app.command(name="sync-projects")
+def sync_projects(
+    file: str = typer.Option(
+        str(DEFAULT_PROJECTS_FILE), "--file", help="Workspace project registry"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print the changes without making them"
+    ),
+):
+    """Mirror the PROJECTS.md registry into openbrain's projects table.
+
+    Registry projects become active with their Purpose as description; active
+    projects missing from the registry are archived. Never deletes. Exits 0 when
+    the registry file is absent, so the timer passes on machines without it.
+    """
+    path = Path(file).expanduser()
+    if not path.exists():
+        console.print(f"sync-projects: {path} not found; nothing to sync.")
+        raise typer.Exit(0)
+    registry = _read_registry(path)
+    try:
+        cfg = load_config()
+    except ConfigError as exc:
+        err.print(str(exc))
+        raise typer.Exit(1)
+    failed = False
+    try:
+        with MCPClient(cfg) as client:
+            existing = _parse_projects(client.call_tool("list_projects", {}))
+            changes: list[tuple[str, str, dict]] = []
+            for name, purpose in registry.items():
+                if name not in existing:
+                    changes.append(
+                        (
+                            f"add {name}",
+                            "add_project",
+                            {"name": name, "description": purpose, "status": "active"},
+                        )
+                    )
+                    continue
+                status, description = existing[name]
+                fields = {}
+                if description != purpose:
+                    fields["description"] = purpose
+                if status != "active":
+                    fields["status"] = "active"
+                if fields:
+                    changes.append(
+                        (
+                            f"update {name}: {', '.join(fields)}",
+                            "update_project",
+                            {"name": name, **fields},
+                        )
+                    )
+            for name, (status, _) in existing.items():
+                if status == "active" and name not in registry:
+                    changes.append(
+                        (
+                            f"archive {name}",
+                            "update_project",
+                            {"name": name, "status": "archived"},
+                        )
+                    )
+            for line, tool, arguments in changes:
+                console.print(line)
+                if dry_run:
+                    continue
+                reply = client.call_tool(tool, arguments)
+                # The server reports a failed lookup (no match, or a partial
+                # name matching several projects) as a normal reply.
+                if not reply.startswith(("Added:", "Updated:")):
+                    err.print(f"sync-projects: {line}: {reply}")
+                    failed = True
+    except (MCPError, MCPToolError) as exc:
+        err.print(f"sync-projects: server unreachable: {exc}")
+        raise typer.Exit(1)
+    raise typer.Exit(1 if failed else 0)
 
 
 @app.command()

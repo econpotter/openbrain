@@ -16,7 +16,6 @@ Input file (PDF or text)
   → INSERT INTO library
   → chunk text (400 words, 50-word overlap)
   → embed each chunk → INSERT INTO chunks
-  → store_thought("Ingested: ...")
 ```
 
 ---
@@ -68,13 +67,8 @@ ingest_document(filepath="/tmp/paper-abc123.pdf")
 
 ---
 
-## Ingest event
+## No ingest thought
 
-Every successful ingest routes a thought with `type: ingest_event` through the
-canonical `store_thought()` / `upsert_thought(...)` path:
-
-```
-"Ingested: Imbens & Kalyanaraman 2012 — Optimal Bandwidth Choice for the Regression Discontinuity Estimator"
-```
-
-This means the document appears in `browse_recent`, `get_briefing`, and `search_brain` results alongside ordinary thoughts — no separate tracking needed.
+An ingest stores no thought. The `library` row is the record of the document;
+search it with `search_library`. Thoughts are for what the person learned or
+decided, not for a log of what was ingested.

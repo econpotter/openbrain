@@ -63,11 +63,11 @@ point the client at `python -m openbrain.server`.
 ## Installing
 
 - **Claude Code** — install the bundled plugin, which registers the MCP server,
-  loads these skills as `openbrain:*`, and wires the SessionStart / Stop /
-  PreCompact hooks in one step. See `claude-code/README.md`.
+  loads these skills as `openbrain:*`, and wires the SessionStart and
+  UserPromptSubmit hooks in one step. See `claude-code/README.md`.
 - **Codex** — run `scripts/install_assistant_integrations.py`. It registers the
-  MCP server in `~/.codex/config.toml`, wires the command-type SessionStart /
-  Stop / PreCompact hooks in `~/.codex/hooks.json`, and copies these skills —
+  MCP server in `~/.codex/config.toml`, wires the command-type SessionStart and
+  UserPromptSubmit hooks in `~/.codex/hooks.json`, and copies these skills —
   the same effective behavior as the Claude Code plugin. Only
   `OPENBRAIN_MCP_KEY` needs to be exported.
 - **Cursor** — the same installer copies the skills; hooks and MCP are deferred

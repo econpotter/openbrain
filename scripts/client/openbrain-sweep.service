@@ -1,5 +1,5 @@
 [Unit]
-Description=openbrain thin-client sweep (flush spool + capture lagging sessions)
+Description=openbrain thin-client sweep (flush the spool)
 After=network-online.target
 Wants=network-online.target
 

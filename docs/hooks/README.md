@@ -29,7 +29,7 @@ never call `capture_thought`.
 Codex uses Claude Code's hook schema — command-type entries under a top-level
 `{"hooks": {...}}` object, PascalCase event names. The canonical template lives
 at `integrations/codex/hooks.json`: `SessionStart` push-recall (`openbrain
-brief`) plus `Stop` / `PreCompact` capture (`openbrain capture-transcript
+brief`) plus the UserPromptSubmit friction check (`openbrain friction
 --source codex`).
 
 Run `scripts/install_assistant_integrations.py` to install it. The installer
@@ -47,7 +47,7 @@ left to inject.
 
 The plugin under `integrations/claude-code/` uses `"type": "command"` hooks that
 call the thin `openbrain` CLI: `SessionStart` push-recall (briefing + recall as
-`additionalContext`) and `Stop` / `PreCompact` capture. Install it via the
+`additionalContext`) and the UserPromptSubmit friction check. Install it via the
 repo-root `.claude-plugin/marketplace.json`; see
 `integrations/claude-code/README.md`.
 

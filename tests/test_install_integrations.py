@@ -29,7 +29,10 @@ class IsOpenbrainEntryTests(unittest.TestCase):
     def test_command_type_entry_detected(self):
         entry = {
             "hooks": [
-                {"type": "command", "command": "openbrain capture-transcript --source codex"}
+                {
+                    "type": "command",
+                    "command": "openbrain capture-transcript --source codex",
+                }
             ]
         }
         self.assertTrue(installer.is_openbrain_entry(entry))
@@ -146,15 +149,14 @@ class MergeCodexHooksTests(unittest.TestCase):
             data = json.loads((home / ".codex" / "hooks.json").read_text())
             cmds = [
                 h["command"]
-                for entry in data["hooks"]["Stop"]
+                for entry in data["hooks"]["UserPromptSubmit"]
                 for h in entry["hooks"]
             ]
             self.assertTrue(any("--source codex" in c for c in cmds))
-            self.assertTrue(all("--quiet" in c for c in cmds if "openbrain" in c))
             # Second run: no change, no duplicate openbrain entries.
             self.assertFalse(self._merge(home))
             data2 = json.loads((home / ".codex" / "hooks.json").read_text())
-            self.assertEqual(len(data2["hooks"]["Stop"]), 1)
+            self.assertEqual(len(data2["hooks"]["UserPromptSubmit"]), 1)
 
     def test_sweeps_out_own_legacy_prompt_entries(self):
         with TemporaryDirectory() as tmp:
@@ -173,7 +175,9 @@ class MergeCodexHooksTests(unittest.TestCase):
             self.assertTrue(self._merge(home))
             data = json.loads((home / ".codex" / "hooks.json").read_text())
             # Our legacy prompt entries are gone; the unrelated one survives.
-            self.assertEqual(data["session_start"], [{"prompt": ["their unrelated reminder"]}])
+            self.assertEqual(
+                data["session_start"], [{"prompt": ["their unrelated reminder"]}]
+            )
             self.assertNotIn("session_end", data)  # became empty -> dropped
             # And the live command-type hooks are now installed under "hooks".
             self.assertIn("SessionStart", data["hooks"])
@@ -189,7 +193,9 @@ class MergeCodexHooksTests(unittest.TestCase):
             unrelated = {
                 "hooks": {
                     "Stop": [
-                        {"hooks": [{"type": "command", "command": "./their_stop.sh"}]}
+                        {"hooks": [{"type": "command", "command": "./their_stop.sh"}]},
+                        # An older openbrain install's Stop capture, no longer shipped.
+                        {"hooks": [{"type": "command", "command": "openbrain stop"}]},
                     ]
                 },
                 "session_start": [{"prompt": ["their reminder"]}],
@@ -203,8 +209,14 @@ class MergeCodexHooksTests(unittest.TestCase):
             stop_cmds = [
                 h["command"] for entry in data["hooks"]["Stop"] for h in entry["hooks"]
             ]
-            self.assertIn("./their_stop.sh", stop_cmds)  # unrelated kept
-            self.assertTrue(any("openbrain" in c for c in stop_cmds))  # ours added
+            # The unrelated entry stays; the old openbrain one is gone.
+            self.assertEqual(stop_cmds, ["./their_stop.sh"])
+            prompt_cmds = [
+                h["command"]
+                for entry in data["hooks"]["UserPromptSubmit"]
+                for h in entry["hooks"]
+            ]
+            self.assertTrue(any("openbrain friction" in c for c in prompt_cmds))
             self.assertEqual(data["session_start"], [{"prompt": ["their reminder"]}])
 
 

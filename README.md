@@ -199,7 +199,8 @@ If you set `MCP_ACCESS_KEY`, configure the connector to send it as a Bearer toke
 
 Claude Code uses the bundled **openbrain plugin**: one `enabledPlugins` entry
 gives every session — in any directory — the openbrain MCP tools, the
-`openbrain:*` skills, SessionStart push-recall, and Stop/PreCompact capture. It
+`openbrain:*` skills, SessionStart push-recall, and a friction check on each
+prompt. It
 replaces the old manual `claude mcp add` registration and the prompt-type hooks.
 
 1. **Thin client CLI** — the plugin's hooks shell out to it, so it must be on
@@ -246,7 +247,7 @@ copies and hand-merged prompt hooks).
 #### Codex (CLI)
 
 Codex reaches the same effective behavior as the Claude Code plugin — MCP tools,
-`openbrain-*` skills, SessionStart push-recall, Stop/PreCompact capture — through
+`openbrain-*` skills, SessionStart push-recall, the prompt friction check — through
 a config-merge installer rather than a plugin bundle.
 
 1. **Thin client CLI** — same as Claude Code, the hooks shell out to it:
@@ -275,7 +276,7 @@ a config-merge installer rather than a plugin bundle.
 #### Auto-capture instructions
 
 **Claude Code and Codex need nothing here** — their installers above already do
-session-start recall and session-end/PreCompact capture via lifecycle hooks. For
+session-start recall and the prompt friction check via lifecycle hooks. For
 every *other* agent, install the instruction text from
 `docs/agent-instructions/auto-capture.md` into its global or project-level
 instructions.

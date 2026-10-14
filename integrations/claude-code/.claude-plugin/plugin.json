@@ -1,7 +1,7 @@
 {
   "name": "openbrain",
-  "version": "0.1.0",
-  "description": "openbrain personal memory for Claude Code: MCP tools, openbrain:* skills, SessionStart push-recall, and Stop/PreCompact capture over the thin openbrain CLI.",
+  "version": "0.2.0",
+  "description": "openbrain personal memory for Claude Code: MCP tools, openbrain:* skills, SessionStart push-recall, and a prompt friction check over the thin openbrain CLI.",
   "author": {
     "name": "Nicholas A. Potter",
     "email": "econpotter@gmail.com"

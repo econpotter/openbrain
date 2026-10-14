@@ -106,6 +106,48 @@ def register(mcp):
         return f"Stored conversation summary {thought_id}"
 
     @mcp.tool
+    async def capture_friction(
+        user: str,
+        agent: str = "",
+        cwd: str = "",
+        session_id: str = "",
+        source: str = "claude-code",
+    ) -> str:
+        """
+        Store a user turn as a friction thought when it shows frustration with the agent.
+
+        The thin client's prompt hook sends every user turn here. Jev judges the
+        turn against the agent text before it; below the configured threshold
+        nothing is stored. A stored friction holds the agent's text, the user's
+        words and the working directory, tagged `friction`, so later analysis can
+        pick which frustrations become hooks or checks.
+
+        Args:
+            user:       The user's turn, verbatim.
+            agent:      The agent's text just before the turn.
+            cwd:        The session's working directory.
+            session_id: Originating session id.
+            source:     Originating tool. Default "claude-code".
+        """
+        probability = await brain.judge_friction(agent, user)
+        if probability < float(brain.JUDGE_CONFIG["friction_threshold"]):
+            return f"Not a friction (p={probability:.2f}); nothing stored."
+        content = (
+            f"Friction in {cwd or 'an unknown directory'}.\n\n"
+            f"The agent wrote:\n{agent.strip()[-1500:]}\n\n"
+            f"The user replied:\n{user.strip()}"
+        )
+        metadata = {
+            "type": "thought",
+            "source": source,
+            "tags": ["friction"],
+            "session_id": session_id,
+            "friction_probability": round(probability, 3),
+        }
+        thought_id = await brain.store_thought(content, metadata)
+        return f"Stored friction {thought_id} (p={probability:.2f})"
+
+    @mcp.tool
     async def remember_preference(
         content: str,
         scope: str | None = None,
@@ -159,7 +201,9 @@ def register(mcp):
             people:    People involved or mentioned.
             projects:  Related project names.
         """
-        content = decision if rationale is None else f"{decision}\n\nRationale: {rationale}"
+        content = (
+            decision if rationale is None else f"{decision}\n\nRationale: {rationale}"
+        )
         metadata = {
             "type": "memory",
             "source": "claude",

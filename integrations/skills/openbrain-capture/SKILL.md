@@ -1,50 +1,33 @@
 ---
 name: openbrain-capture
 description: >
-  Capture a thought, decision, preference, or project update into openbrain
-  personal memory. Use when the user says "capture this", "remember that",
-  "save to openbrain", "log this decision", "note this preference", or
-  "record a project update".
+  Capture what a session settled into openbrain memory. Use when the user says
+  "capture this", "remember that", "save to openbrain", or "log this".
 ---
 
 # openbrain capture
 
-Persist the user-provided content, or if empty a summary of the current
-discussion, by calling the most specific openbrain MCP capture tool. Do not
-default to `capture_thought` for everything.
+Write what a colleague would need to pick this work up months from now without
+the session. One capture per topic the user means; a session that changed
+topics gives several.
+
+Capture where the discussion ended, not how it got there: the idea and why it
+matters, the design or argument as settled with its reasons and the
+alternatives rejected, durable domain facts, preferences that hold beyond this
+task in the user's words, and what was explicitly deferred. Mark each research
+or empirical claim as derived, measured (name the points) or inferred. State
+only what the session stated.
+
+Leave out what is cheap to find again or will change: costs, paths, commands,
+commits, status, task steps, unresolved technicalities, and rules already
+written in an AGENTS.md or the coding standards.
+
+Write plain prose in the third person ("the user"), present tense for
+decisions, as long as the content needs.
 
 ## Mechanism
 
-Call one openbrain MCP tool. If the openbrain MCP server is not connected, stop
-and tell the user to connect it.
-
-## Routing
-
-| Content is... | Call | Key args |
-|---|---|---|
-| Stable preference / convention ("I always...", "from now on...") | `remember_preference` | `content`, `scope?`, `projects?` |
-| Choice + reason ("decided to...", "going with X because...") | `capture_decision` | `decision`, `rationale?`, `projects?`, `people?` |
-| Milestone/blocker/next-step about one named project | `capture_project_update` | `project`, `update`, `status?` (`active`\|`paused`\|`completed`\|`archived`) |
-| Other durable fact, observation, or session summary | `capture_thought` | `content`, `type` (`thought`\|`note`), `tags?`, `people?`, `projects?` |
-
-Fill optional metadata the conversation makes obvious: `tags`, `people`,
-`projects`, `action_items`, `importance` (0-6). Left out, importance and
-projects are judged automatically after capture. Use `type: note` for
-long-form/structured notes; `type: thought` for quick observations.
-
-Projects mirror the workspace PROJECTS.md (`openbrain sync-projects`). Name a
-project exactly as `list_projects` shows it, and never add one; register a new
-project in PROJECTS.md instead. Before capturing a thought that mentions a
-person, check whether they exist (`get_person` or search). If absent, add them
-first (`add_person`), then capture.
-
-## After
-
-Report the returned id, e.g. `Stored thought <uuid>`. Do not re-capture to
-verify; returned id is confirmation.
-
-## Gotchas
-
-- A server `TypeError` on `result["id"]` means the openbrain image predates the
-  JSONB decode fix (commit e248b05). Rebuild it; do not retry.
-- Duplicate captures merge metadata server-side and return the existing id.
+Call `capture_thought` once per capture with `content`, `projects` (names as
+`list_projects` shows them) and one `tags` entry for the kind: idea, design,
+preference or domain-fact. Leave `importance` unset; Jev judges it. If the
+openbrain MCP server is not connected, say so and stop. Report the returned id.

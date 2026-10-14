@@ -8,8 +8,9 @@ blocks a session or surfaces a stack trace.
 Subcommands:
     capture             direct passthrough to capture_thought
     capture-transcript  summarize a transcript delta past the watermark
+    friction            queue the user's prompt for the friction check (UserPromptSubmit)
     brief               briefing + project-relevant recall (for SessionStart)
-    sweep               flush the spool, then capture any lagging session
+    sweep               flush the spool
     status              connectivity + spool depth + watermark summary
     sync-projects       mirror the workspace PROJECTS.md into the projects table
 """
@@ -37,28 +38,8 @@ console = Console()
 # stderr for diagnostics; stdout stays clean for hook additionalContext capture.
 err = Console(stderr=True)
 
-# Ordered {source_label: transcript root}. Each swept directory tags its own
-# captures with the matching source, so one sweep pass labels Claude Code and
-# Codex sessions distinctly. The parser (transcript.py) auto-detects the line
-# shape regardless; the label is the naming/analytics side.
-DEFAULT_TRANSCRIPT_DIRS: dict[str, Path] = {
-    "claude-code": Path.home() / ".claude" / "projects",
-    "codex": Path.home() / ".codex" / "sessions",
-}
-
-
-def _source_for_dir(base: Path) -> str:
-    """Best-effort source label for an explicitly-passed sweep directory.
-
-    Reverse-matches the known default roots; falls back to `codex` for a
-    `.codex` path and `claude-code` otherwise. The parser tells the transcripts
-    apart by shape either way, so this only affects the analytics label.
-    """
-    resolved = base.expanduser().resolve()
-    for label, known in DEFAULT_TRANSCRIPT_DIRS.items():
-        if resolved == known.expanduser().resolve():
-            return label
-    return "codex" if ".codex" in resolved.parts else "claude-code"
+# Codex keeps date-nested session files here; a Codex hook may omit the path.
+CODEX_SESSIONS = Path.home() / ".codex" / "sessions"
 
 
 def _now() -> str:
@@ -152,7 +133,7 @@ def _find_codex_transcript(session_id: str | None) -> Path | None:
     """
     if not session_id:
         return None
-    base = DEFAULT_TRANSCRIPT_DIRS["codex"].expanduser()
+    base = CODEX_SESSIONS
     matches = sorted(
         base.glob(f"**/*{session_id}.jsonl"),
         key=lambda p: p.stat().st_mtime if p.exists() else 0,
@@ -258,6 +239,46 @@ def capture_transcript(
     _set_watermark_or_report(quiet, session_id, delta.total_lines)
     if not quiet:
         (console if online else err).print(message)
+    raise typer.Exit(0)
+
+
+@app.command()
+def friction(
+    source: str = typer.Option(
+        "claude-code", "--source", help="Provider label: claude-code|codex"
+    ),
+):
+    """Queue the user's prompt for the server's friction check (UserPromptSubmit).
+
+    Prints nothing, because a UserPromptSubmit hook's stdout becomes session
+    context. Skips `claude -p` workers (CLAUDE_CODE_ENTRYPOINT=sdk-cli), whose
+    prompts an agent wrote, and slash commands. Queues rather than calling the
+    server so the prompt never waits; the sweep sends the queue.
+    """
+    if os.environ.get("CLAUDE_CODE_ENTRYPOINT") == "sdk-cli":
+        raise typer.Exit(0)
+    hook = _read_hook_stdin()
+    prompt = str(hook.get("prompt") or "").strip()
+    if not prompt or prompt.startswith("/"):
+        raise typer.Exit(0)
+    session_id = hook.get("session_id") or os.environ.get("CODEX_THREAD_ID") or ""
+    path = hook.get("transcript_path") or (
+        _find_codex_transcript(session_id) if source == "codex" else None
+    )
+    agent = ""
+    if path and Path(path).expanduser().exists():
+        agent = transcript.read_last_reply(path)
+    arguments = {
+        "user": prompt,
+        "agent": agent,
+        "cwd": hook.get("cwd") or "",
+        "session_id": session_id,
+        "source": source,
+    }
+    try:
+        spool.enqueue("capture_friction", arguments, _now())
+    except OSError:
+        pass  # a lost friction never blocks a prompt
     raise typer.Exit(0)
 
 
@@ -389,55 +410,9 @@ def _flush_spool(client: MCPClient) -> tuple[int, int]:
     return flushed, spool.depth()
 
 
-def _sweep_transcripts(client: MCPClient, dirs: dict[str, Path]) -> int:
-    """Capture any session whose watermark lags its transcript. Returns captures.
-
-    `dirs` maps a source label to a transcript root; each swept directory tags
-    its captures with its own label so Codex and Claude Code sessions stay
-    distinct in a single pass.
-    """
-    captured = 0
-    for source_label, base in dirs.items():
-        base = base.expanduser()
-        if not base.exists():
-            continue
-        for tpath in sorted(base.glob("**/*.jsonl")):
-            session_id = tpath.stem
-            watermark = state.get_watermark(session_id)
-            delta = transcript.read_delta(tpath, watermark)
-            if not delta.text.strip():
-                if delta.total_lines != watermark:
-                    state.set_watermark(session_id, delta.total_lines)
-                continue
-            try:
-                client.call_tool(
-                    "capture_transcript",
-                    {
-                        "content": delta.text,
-                        "session_id": session_id,
-                        "trigger": "sweep",
-                        "source": source_label,
-                    },
-                )
-            except (MCPError, MCPToolError) as exc:
-                err.print(f"sweep: {tpath.name}: {exc}")
-                continue
-            state.set_watermark(session_id, delta.total_lines)
-            captured += 1
-    return captured
-
-
 @app.command()
-def sweep(
-    transcript_dirs: list[str] = typer.Option(
-        None, "--transcript-dirs", help="Dirs of *.jsonl transcripts to scan"
-    ),
-):
-    """Flush the spool, then capture any lagging session. Idempotent."""
-    if transcript_dirs:
-        dirs = {_source_for_dir(Path(d)): Path(d) for d in transcript_dirs}
-    else:
-        dirs = DEFAULT_TRANSCRIPT_DIRS
+def sweep():
+    """Flush the spool. Idempotent."""
     try:
         cfg = load_config()
     except ConfigError as exc:
@@ -446,14 +421,10 @@ def sweep(
     try:
         with MCPClient(cfg) as client:
             flushed, remaining = _flush_spool(client)
-            captured = _sweep_transcripts(client, dirs)
     except (MCPError, MCPToolError) as exc:
         err.print(f"sweep: server unreachable: {exc}")
         raise typer.Exit(1)
-    console.print(
-        f"Flushed {flushed} spooled capture(s) ({remaining} remaining); "
-        f"captured {captured} lagging session(s)."
-    )
+    console.print(f"Flushed {flushed} spooled capture(s) ({remaining} remaining).")
     raise typer.Exit(0)
 
 

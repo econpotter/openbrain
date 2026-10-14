@@ -28,12 +28,15 @@ and tell the user to connect it.
 | Other durable fact, observation, or session summary | `capture_thought` | `content`, `type` (`thought`\|`note`), `tags?`, `people?`, `projects?` |
 
 Fill optional metadata the conversation makes obvious: `tags`, `people`,
-`projects`, `action_items`, `importance` (0-6). Use `type: note` for
+`projects`, `action_items`, `importance` (0-6). Left out, importance and
+projects are judged automatically after capture. Use `type: note` for
 long-form/structured notes; `type: thought` for quick observations.
 
-Before capturing a thought that mentions a project/person, check whether it
-already exists (`get_project` / `get_person` or search). If absent, add it
-first (`add_project` / `add_person`), then capture.
+Projects mirror the workspace PROJECTS.md (`openbrain sync-projects`). Name a
+project exactly as `list_projects` shows it, and never add one; register a new
+project in PROJECTS.md instead. Before capturing a thought that mentions a
+person, check whether they exist (`get_person` or search). If absent, add them
+first (`add_person`), then capture.
 
 ## After
 

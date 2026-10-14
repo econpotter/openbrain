@@ -27,6 +27,7 @@ server = [
     "pdfplumber",
     "voyageai",
     "openai",
+    "typesafe-sdk",
     "python-dotenv",
     "bibtexparser",
     "citer @ git+https://github.com/econpotter/citer",

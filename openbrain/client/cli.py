@@ -465,23 +465,40 @@ _PROJECT_LINE = re.compile(
 )
 
 
-def _read_registry(path: Path) -> dict[str, str]:
-    """Read {name: Purpose} from PROJECTS.md, joining wrapped Purpose lines."""
-    registry: dict[str, str] = {}
+def _read_registry(path: Path) -> dict[str, dict]:
+    """Read {name: {description, formerly}} from PROJECTS.md.
+
+    The description is the Purpose line (wrapped lines joined) plus any former
+    names, so a note that still uses an old name maps to the project. `formerly`
+    lists the names from a `- Formerly: a, b` line, which sync uses to rename.
+    """
+    purposes: dict[str, str] = {}
+    formerly: dict[str, list[str]] = {}
     name = None
     in_purpose = False
     for line in path.read_text().splitlines():
         if line.startswith("## "):
             name = line[3:].strip()
-            registry[name] = ""
+            purposes[name] = ""
+            formerly[name] = []
             in_purpose = False
         elif name and line.startswith("- Purpose:"):
-            registry[name] = line.removeprefix("- Purpose:").strip()
+            purposes[name] = line.removeprefix("- Purpose:").strip()
             in_purpose = True
         elif name and in_purpose and line.startswith((" ", "\t")) and line.strip():
-            registry[name] += " " + line.strip()
+            purposes[name] += " " + line.strip()
+        elif name and line.startswith("- Formerly:"):
+            old = line.removeprefix("- Formerly:").split(",")
+            formerly[name] = [n.strip() for n in old if n.strip()]
+            in_purpose = False
         else:
             in_purpose = False
+    registry = {}
+    for name, purpose in purposes.items():
+        description = purpose
+        if formerly[name]:
+            description += f" Formerly: {', '.join(formerly[name])}."
+        registry[name] = {"description": description, "formerly": formerly[name]}
     return registry
 
 
@@ -512,7 +529,9 @@ def sync_projects(
     """Mirror the PROJECTS.md registry into openbrain's projects table.
 
     Registry projects become active with their Purpose as description; active
-    projects missing from the registry are archived. Never deletes. Exits 0 when
+    projects missing from the registry are archived. A registry project with a
+    `- Formerly: old-name` line renames the old row instead of adding a new one,
+    so its links carry over. Never deletes. Exits 0 when
     the registry file is absent, so the timer passes on machines without it.
     """
     path = Path(file).expanduser()
@@ -530,15 +549,37 @@ def sync_projects(
         with MCPClient(cfg) as client:
             existing = _parse_projects(client.call_tool("list_projects", {}))
             changes: list[tuple[str, str, dict]] = []
-            for name, purpose in registry.items():
+            renamed: set[str] = set()
+            for name, entry in registry.items():
+                purpose = entry["description"]
                 if name not in existing:
-                    changes.append(
-                        (
-                            f"add {name}",
-                            "add_project",
-                            {"name": name, "description": purpose, "status": "active"},
+                    former = next((f for f in entry["formerly"] if f in existing), None)
+                    if former:
+                        renamed.add(former)
+                        changes.append(
+                            (
+                                f"rename {former} -> {name}",
+                                "update_project",
+                                {
+                                    "name": former,
+                                    "new_name": name,
+                                    "description": purpose,
+                                    "status": "active",
+                                },
+                            )
                         )
-                    )
+                    else:
+                        changes.append(
+                            (
+                                f"add {name}",
+                                "add_project",
+                                {
+                                    "name": name,
+                                    "description": purpose,
+                                    "status": "active",
+                                },
+                            )
+                        )
                     continue
                 status, description = existing[name]
                 fields = {}
@@ -555,7 +596,7 @@ def sync_projects(
                         )
                     )
             for name, (status, _) in existing.items():
-                if status == "active" and name not in registry:
+                if status == "active" and name not in registry and name not in renamed:
                     changes.append(
                         (
                             f"archive {name}",

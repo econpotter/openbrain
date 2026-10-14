@@ -12,7 +12,7 @@ Edges are created at two points:
 
 **Capture time** — When a thought is stored with `metadata.people` or `metadata.projects`, an async fire-and-forget task (`_link_thought_entities`) attempts to resolve each name to a unique person or project. If exactly one match is found, a `thought <-> entity` edge is inserted with relationship `'mentions'`. Names with zero or ambiguous matches are skipped (mirrors existing tool behavior).
 
-**Backfill** — The `backfill_links` tool populates edges for thoughts captured before this feature existed. It scans thoughts with non-empty `metadata.people` or `metadata.projects` that lack outgoing `links` rows and calls the same resolution logic.
+**Enrichment** — Jev picks each thought's projects from the active list (`judge_thought`) and the same linking runs on its picks. `backfill_thought_judgments` does this for thoughts captured before Jev, so older thoughts need no separate link backfill.
 
 ---
 

@@ -10,11 +10,22 @@ MCP Python SDK — keeps the thin client thin.
 from __future__ import annotations
 
 import json
+import os
+import ssl
 from typing import Any
 
 import httpx
 
 PROTOCOL_VERSION = "2025-06-18"
+
+# System CA bundles on Debian/Ubuntu and Fedora/RHEL. httpx otherwise trusts only
+# certifi, which lacks a self-hosted authority such as Caddy's local CA. The
+# bundle file is loaded directly because the per-certificate links in
+# /etc/ssl/certs can point at root-only files the user cannot read.
+SYSTEM_CA_BUNDLES = (
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+)
 
 # Connecting is either fast or never: a live tunnel completes the TCP/TLS
 # handshake in milliseconds, while a dead one hangs until the timeout expires.
@@ -41,6 +52,18 @@ def _timeout(seconds: float) -> httpx.Timeout:
     return httpx.Timeout(seconds, connect=min(CONNECT_TIMEOUT, seconds))
 
 
+def make_tls_verify(verify_tls: bool) -> ssl.SSLContext | bool:
+    """Trust what the operating system trusts; fall back to certifi without a bundle."""
+    if not verify_tls:
+        return False
+    bundle = next((path for path in SYSTEM_CA_BUNDLES if os.path.isfile(path)), None)
+    if bundle is None:
+        return True
+    context = ssl.create_default_context()
+    context.load_verify_locations(cafile=bundle)
+    return context
+
+
 def _parse_sse(body: str) -> dict:
     """Pull the JSON payload out of a single-message SSE response body."""
     for line in body.splitlines():
@@ -62,7 +85,7 @@ class MCPClient:
         self._config = config
         self._client = httpx.Client(
             timeout=_timeout(config.timeout),
-            verify=config.verify_tls,
+            verify=make_tls_verify(config.verify_tls),
             headers={"Authorization": f"Bearer {config.key}"},
         )
         self._session_id: str | None = None
@@ -120,7 +143,9 @@ class MCPClient:
         if session_id:
             self._session_id = session_id
         if response.status_code >= 400:
-            raise MCPError(f"{method} → HTTP {response.status_code}: {response.text[:200]}")
+            raise MCPError(
+                f"{method} → HTTP {response.status_code}: {response.text[:200]}"
+            )
 
         content_type = response.headers.get("content-type", "")
         if "text/event-stream" in content_type:
@@ -170,7 +195,9 @@ class MCPClient:
         """
         result = self._rpc("tools/call", {"name": name, "arguments": arguments or {}})
         if not isinstance(result, dict):
-            raise MCPError(f"tools/call {name} returned {type(result).__name__}, expected object")
+            raise MCPError(
+                f"tools/call {name} returned {type(result).__name__}, expected object"
+            )
 
         text = _text_from_content(result.get("content"))
         if result.get("isError"):

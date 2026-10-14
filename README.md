@@ -170,7 +170,8 @@ docker exec caddy cat /data/caddy/pki/authorities/local/root.crt > caddy-root.cr
 # Copy caddy-root.crt to your client machine, then:
 
 # Linux
-sudo cp caddy-root.crt /usr/local/share/ca-certificates/caddy-root.crt
+# Mode 644: Python clients cannot read a root-only certificate.
+sudo install -m 644 caddy-root.crt /usr/local/share/ca-certificates/caddy-root.crt
 sudo update-ca-certificates
 
 # macOS
@@ -209,15 +210,24 @@ replaces the old manual `claude mcp add` registration and the prompt-type hooks.
    uv tool install /path/to/openbrain   # from this checkout
    ```
 
-2. **Bearer token + endpoint** — read from the environment, never committed.
-   Export them where Claude Code (and the hook shells) can see them, e.g. in your
-   shell profile:
+2. **Bearer token + endpoint** — kept in one untracked file, `~/.openbrain/env`
+   (mode 600), that both your shell and the nightly sweep timer read. Systemd
+   units cannot see variables exported by a shell profile.
 
    ```bash
-   export OPENBRAIN_MCP_KEY="<your-mcp-access-key>"              # same value as MCP_ACCESS_KEY
-   export OPENBRAIN_MCP_URL="https://<your-hostname>:8443/mcp"   # optional; defaults to the tunnel URL
-   # export OPENBRAIN_MCP_INSECURE=1                             # only for a self-signed internal endpoint
+   # ~/.openbrain/env
+   OPENBRAIN_MCP_URL=https://<your-hostname>:8443/mcp
+   OPENBRAIN_MCP_KEY=<your-mcp-access-key>    # same value as MCP_ACCESS_KEY
    ```
+
+   Load it in your shell profile so Claude Code and the hooks see it:
+
+   ```bash
+   [[ -r ~/.openbrain/env ]] && { set -a; source ~/.openbrain/env; set +a; }
+   ```
+
+   The client trusts the system CA bundle, so a Caddy root certificate added
+   with `update-ca-certificates` works without `OPENBRAIN_MCP_INSECURE=1`.
 
 3. **Add the marketplace and install the plugin** (this repo doubles as its own
    marketplace via `.claude-plugin/marketplace.json`):
@@ -246,14 +256,9 @@ a config-merge installer rather than a plugin bundle.
    uv tool install /path/to/openbrain   # from this checkout
    ```
 
-2. **Bearer token + endpoint** — the *only* client-side env var Codex needs is
-   `OPENBRAIN_MCP_KEY`, the same value Claude Code uses. Export it in your shell
-   profile (optionally `OPENBRAIN_MCP_URL` to override the default endpoint):
-
-   ```bash
-   export OPENBRAIN_MCP_KEY="<your-mcp-access-key>"
-   export OPENBRAIN_MCP_URL="https://<your-hostname>:8443/mcp"   # optional
-   ```
+2. **Bearer token + endpoint** — the same `~/.openbrain/env` file Claude Code
+   uses, loaded in your shell profile as shown above. `OPENBRAIN_MCP_KEY` is the
+   only variable Codex itself reads.
 
 3. **Run the installer** — idempotent and self-healing (it fixes a stale MCP
    `bearer_token_env_var` and never touches an unrelated project's hook entries):
@@ -507,7 +512,8 @@ Caddy uses `tls internal` (self-signed CA). The client must trust it or TLS hand
 # On fuji:
 docker cp caddy:/data/caddy/pki/authorities/local/root.crt /tmp/caddy-fuji.crt
 # Copy caddy-fuji.crt to reason, then on reason:
-sudo cp caddy-fuji.crt /usr/local/share/ca-certificates/caddy-fuji.crt
+# Mode 644: Python clients cannot read a root-only certificate.
+sudo install -m 644 caddy-fuji.crt /usr/local/share/ca-certificates/caddy-fuji.crt
 sudo update-ca-certificates
 ```
 

@@ -69,6 +69,7 @@ def _capture_or_spool(tool: str, arguments: dict) -> tuple[bool, str]:
     Returns (online, message). online=True means the server acknowledged the
     call (message is its reply); online=False means it was spooled.
     """
+
     def _spool_or_report(reason: str) -> tuple[bool, str]:
         try:
             spool.enqueue(tool, arguments, _now())
@@ -93,9 +94,13 @@ def _capture_or_spool(tool: str, arguments: dict) -> tuple[bool, str]:
 @app.command()
 def capture(
     text: str = typer.Argument(..., help="Thought text to store"),
-    type: str = typer.Option("thought", "--type", help="thought|note|memory|conversation"),
+    type: str = typer.Option(
+        "thought", "--type", help="thought|note|memory|conversation"
+    ),
     tags: list[str] = typer.Option(None, "--tags", help="Topic keyword; repeatable"),
-    projects: list[str] = typer.Option(None, "--projects", help="Project name; repeatable"),
+    projects: list[str] = typer.Option(
+        None, "--projects", help="Project name; repeatable"
+    ),
     people: list[str] = typer.Option(None, "--people", help="Person name; repeatable"),
 ):
     """Capture a thought directly (passthrough to capture_thought)."""
@@ -172,7 +177,9 @@ def capture_transcript(
     transcript_path: str = typer.Argument(None, help="Path to the transcript JSONL"),
     session: str = typer.Option(None, "--session", help="Session id (watermark key)"),
     trigger: str = typer.Option(None, "--trigger", help="stop|auto|manual"),
-    source: str = typer.Option(None, "--source", help="Provider label: claude-code|codex"),
+    source: str = typer.Option(
+        None, "--source", help="Provider label: claude-code|codex"
+    ),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress all hook output"),
     defer: bool = typer.Option(
         False,
@@ -203,13 +210,17 @@ def capture_transcript(
             path = str(codex_path)
 
     if not path or not session_id:
-        _quiet_print(quiet, "capture-transcript: need a transcript path and session id.")
+        _quiet_print(
+            quiet, "capture-transcript: need a transcript path and session id."
+        )
         raise typer.Exit(0)  # fail soft — never break a hook
     if not src:
         # No source label: refuse loudly rather than silently mislabel the
         # capture (Codex thoughts stamped claude-code, or vice versa). Every
         # shipped hook passes --source; this only trips a hand-rolled one.
-        _quiet_print(quiet, "capture-transcript: need a --source label (e.g. claude-code|codex).")
+        _quiet_print(
+            quiet, "capture-transcript: need a --source label (e.g. claude-code|codex)."
+        )
         raise typer.Exit(0)
     if not Path(path).expanduser().exists():
         _quiet_print(quiet, f"capture-transcript: transcript not found: {path}")
@@ -267,6 +278,42 @@ BRIEF_BUDGET_SECONDS = 6.0
 # enrichment.
 BRIEF_MIN_RECALL_SECONDS = 1.0
 
+# The sweep timer flushes the spool daily, so a queued capture older than this
+# means the sweep has been failing.
+SPOOL_STALE_DAYS = 2
+
+
+def _spool_warning() -> str:
+    """Name a stale spool, or return "" when the sweep is keeping up."""
+    pending = spool.pending()
+    if not pending:
+        return ""
+    age_days = (time.time() - pending[0].stat().st_mtime) / 86400
+    if age_days < SPOOL_STALE_DAYS:
+        return ""
+    return (
+        f"openbrain: {len(pending)} captures queued, the oldest {age_days:.0f} days old. "
+        "The sweep is not sending them; run `openbrain sweep` to see why."
+    )
+
+
+def _emit_session_start(context: str, warning: str) -> None:
+    """Print the SessionStart hook JSON: context for the model, warning for the user."""
+    output: dict = {}
+    if warning:
+        output["systemMessage"] = warning
+        context = "\n\n".join(b for b in (warning, context) if b)
+    if context:
+        output["hookSpecificOutput"] = {
+            "hookEventName": "SessionStart",
+            "additionalContext": context,
+        }
+    if output:
+        # Raw stdout (typer.echo, not the rich Console): the SessionStart hook
+        # parses this as JSON, and recall text can contain markup-like brackets
+        # (e.g. "[2026-07-01]") that rich would mangle or wrap.
+        typer.echo(json.dumps(output))
+
 
 @app.command()
 def brief(
@@ -284,8 +331,8 @@ def brief(
     (`BRIEF_BUDGET_SECONDS`) rather than a per-request timeout: the remaining
     budget is handed to each successive round trip, and recall is dropped when
     too little is left. Recall is best-effort: if it fails the briefing is still
-    emitted. If the briefing itself fails, prints nothing and exits 0 so the hook
-    injects no context rather than surfacing an error.
+    emitted. If the briefing itself fails, or the spool has gone stale, emits a
+    `systemMessage` warning naming the failure. Always exits 0.
     """
     deadline = time.monotonic() + BRIEF_BUDGET_SECONDS
     hook = _read_hook_stdin()
@@ -309,24 +356,13 @@ def brief(
                     recall = client.call_tool("search_brain", {"query": recall_query})
                 except (MCPError, MCPToolError):
                     recall = ""
-    except (ConfigError, MCPError, MCPToolError):
-        raise typer.Exit(0)  # silent: no context is better than a broken hook
+    except (ConfigError, MCPError, MCPToolError) as exc:
+        reason = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+        _emit_session_start("", f"openbrain: briefing failed: {reason}")
+        raise typer.Exit(0)
 
     blocks = [b for b in (briefing.strip(), recall.strip()) if b]
-    if blocks:
-        # Raw stdout (typer.echo, not the rich Console): the SessionStart hook
-        # parses this as JSON, and recall text can contain markup-like brackets
-        # (e.g. "[2026-07-01]") that rich would mangle or wrap.
-        typer.echo(
-            json.dumps(
-                {
-                    "hookSpecificOutput": {
-                        "hookEventName": "SessionStart",
-                        "additionalContext": "\n\n".join(blocks),
-                    }
-                }
-            )
-        )
+    _emit_session_start("\n\n".join(blocks), _spool_warning())
     raise typer.Exit(0)
 
 
@@ -428,7 +464,9 @@ def status():
     try:
         cfg = load_config(timeout=8.0)
     except ConfigError as exc:
-        console.print(f"Config: [red]not configured[/red] — {exc.args[0].splitlines()[0]}")
+        console.print(
+            f"Config: [red]not configured[/red] — {exc.args[0].splitlines()[0]}"
+        )
         raise typer.Exit(0)
     console.print(f"Endpoint: {cfg.url}")
     try:

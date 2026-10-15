@@ -750,7 +750,10 @@ async def judge_thought(content: str) -> dict:
     One request holds an importance Score over ``IMPORTANCE_LEVELS`` and a Choice
     over the active projects plus "none". A Choice beat one yes/no per project on
     51 labelled thoughts (2026-10-14): 45 exact project sets against at most 35,
-    because a yes/no also says yes to projects on related topics. Returns metadata
+    because a yes/no also says yes to projects on related topics. The singular
+    question beat two wordings that said a note can record several projects or
+    none (same thoughts, 2026-10-14): 48 exact sets against 46 and 42; the pick
+    rule below already returns several projects or none. Returns metadata
     to merge: ``judge`` keeps the raw answers (model, continuous importance score,
     the Choice distribution) so a new rule needs no new calls; ``importance`` is
     the score rounded to a level; ``projects`` holds the top project and any other

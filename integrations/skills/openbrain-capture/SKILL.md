@@ -27,7 +27,9 @@ decisions, as long as the content needs.
 
 ## Mechanism
 
-Call `capture_thought` once per capture with `content`, `projects` (names as
-`list_projects` shows them) and one `tags` entry for the kind: idea, design,
-preference or domain-fact. Leave `importance` unset; Jev judges it. If the
+Call `capture_thought` once per capture with `content`, `projects` and one
+`tags` entry for the kind: idea, design, preference or domain-fact. `projects`
+holds every project the thought applies to, named as `list_projects` shows
+them. A thought can apply to several projects or to none; leave `projects`
+empty when none applies, rather than picking the nearest one. Leave `importance` unset; Jev judges it. If the
 openbrain MCP server is not connected, say so and stop. Report the returned id.

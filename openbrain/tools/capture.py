@@ -40,7 +40,8 @@ def register(mcp):
                       or structured notes rather than a quick observation.
             tags:     Freeform topic keywords (e.g. ["bandwidth", "kernel methods"]).
             people:   Names of people mentioned (e.g. ["Imbens", "Kalyanaraman"]).
-            projects: Project names mentioned (e.g. ["SDC", "dissertation"]).
+            projects: Every project the thought applies to (e.g. ["SDC", "dissertation"]);
+                      several or none. Leave unset when no project applies.
             importance: 0–6 importance score. Higher means more durable.
             sensitivity_tier: standard | personal | restricted.
             quality_score: 0–100 confidence/usefulness score.

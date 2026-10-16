@@ -71,8 +71,8 @@ def register(mcp):
             lines.append(f"\n### Thoughts & notes ({len(thoughts)}):")
             for t in thoughts:
                 ts = t["created_at"].strftime("%Y-%m-%d")
-                snippet = t["content"][:200].replace("\n", " ")
-                lines.append(f"  [{ts}] {snippet}")
+                content = t["content"].replace("\n", " ")
+                lines.append(f"  [{ts}] {content}")
 
         if result["cooccurring_projects"]:
             lines.append("\n### Co-occurring projects:")
@@ -116,8 +116,8 @@ def register(mcp):
             lines.append(f"\n### Thoughts & notes ({len(thoughts)}):")
             for t in thoughts:
                 ts = t["created_at"].strftime("%Y-%m-%d")
-                snippet = t["content"][:200].replace("\n", " ")
-                lines.append(f"  [{ts}] {snippet}")
+                content = t["content"].replace("\n", " ")
+                lines.append(f"  [{ts}] {content}")
 
         if result["cooccurring_people"]:
             lines.append("\n### Co-occurring people:")
@@ -166,8 +166,8 @@ def register(mcp):
         lines = [f"Found {len(thoughts)} thought(s) mentioning '{name}':\n"]
         for t in thoughts:
             ts = t["created_at"].strftime("%Y-%m-%d")
-            snippet = t["content"][:200].replace("\n", " ")
-            lines.append(f"[{ts}] {snippet}")
+            content = t["content"].replace("\n", " ")
+            lines.append(f"[{ts}] {content}")
 
         if cooc["people"]:
             lines.append("\nCo-occurring people:")
@@ -247,7 +247,9 @@ def register(mcp):
         return "\n".join(lines)
 
     @mcp.tool
-    async def search_projects(query: str, threshold: float = 0.3, count: int = 10) -> str:
+    async def search_projects(
+        query: str, threshold: float = 0.3, count: int = 10
+    ) -> str:
         """
         Semantic search over projects — find projects related to a topic or description.
 
@@ -363,7 +365,11 @@ def register(mcp):
         updated = await brain.update_person(str(person["id"]), updates)
         if not updated:
             return "Update failed."
-        fu = f" — follow-up: {updated['follow_up_date']}" if updated.get("follow_up_date") else ""
+        fu = (
+            f" — follow-up: {updated['follow_up_date']}"
+            if updated.get("follow_up_date")
+            else ""
+        )
         return f"Updated: {updated['name']}{fu}"
 
     @mcp.tool

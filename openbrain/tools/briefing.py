@@ -30,7 +30,8 @@ def register(mcp):
         today = date.today()
         since = today - timedelta(days=days - 1)
         period = (
-            "today" if days == 1
+            "today"
+            if days == 1
             else f"this week ({since.strftime('%b %d')} – {today.strftime('%b %d')})"
             if days <= 7
             else f"past {days} days ({since.strftime('%b %d')} – {today.strftime('%b %d')})"
@@ -68,7 +69,9 @@ def register(mcp):
             lines = [f"INGESTED ({len(data['library'])} document(s)):"]
             for doc in data["library"]:
                 authors = doc["authors"] or []
-                author_str = " & ".join(authors[:2]) + (" et al." if len(authors) > 2 else "")
+                author_str = " & ".join(authors[:2]) + (
+                    " et al." if len(authors) > 2 else ""
+                )
                 line = f"  • {doc['title']}"
                 if author_str:
                     line += f" — {author_str}"
@@ -132,8 +135,8 @@ def register(mcp):
             for t in results["thoughts"]:
                 ts = t["created_at"].strftime("%Y-%m-%d")
                 score = f"{t['score']:.2f}"
-                snippet = t["content"][:250].replace("\n", " ")
-                lines.append(f"  [{score}] [{ts}] {snippet}")
+                content = t["content"].replace("\n", " ")
+                lines.append(f"  [{score}] [{ts}] {content}")
             sections.append("\n".join(lines))
 
         if results["library"]:
@@ -141,8 +144,8 @@ def register(mcp):
             for r in results["library"]:
                 score = f"{r['score']:.2f}"
                 authors = r["authors"] or []
-                author_str = (
-                    " & ".join(authors[:2]) + (" et al." if len(authors) > 2 else "")
+                author_str = " & ".join(authors[:2]) + (
+                    " et al." if len(authors) > 2 else ""
                 )
                 header = f"  [{score}] {r['title']}"
                 if author_str:

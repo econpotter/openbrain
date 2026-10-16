@@ -34,13 +34,13 @@ def register(mcp):
         lines = []
         for r in results:
             score = f"{r['similarity']:.2f}"
-            snippet = r["content"][:300].replace("\n", " ")
+            content = r["content"].replace("\n", " ")
             meta = r.get("metadata") or {}
             if isinstance(meta, str):
                 meta = json.loads(meta)
             tags = ", ".join(meta.get("tags", []))
             tag_str = f"  [{tags}]" if tags else ""
-            lines.append(f"[{score}]{tag_str} {snippet}")
+            lines.append(f"[{score}]{tag_str} {content}")
         return "\n\n".join(lines)
 
     @mcp.tool
@@ -64,8 +64,8 @@ def register(mcp):
         lines = []
         for r in results:
             ts = r["created_at"].strftime("%Y-%m-%d %H:%M")
-            snippet = r["content"][:300].replace("\n", " ")
-            lines.append(f"[{ts}] {snippet}")
+            content = r["content"].replace("\n", " ")
+            lines.append(f"[{ts}] {content}")
         return "\n\n".join(lines)
 
     @mcp.tool
